@@ -53,7 +53,14 @@ export function PopupConsent({ onAccept }: { onAccept: () => void }) {
           <HeroShield />
         </div>
         <h2 className="si-consent-gate-title">Catch secrets before you paste</h2>
-        <p className="si-consent-gate-text">On-device protection — nothing leaves your browser.</p>
+        <p className="si-consent-gate-text">
+          On-device protection — pasted text and secret values stay in your browser.
+        </p>
+        <p className="si-consent-gate-text si-consent-gate-text--shadow">
+          Signed-in Business organisation users also share limited Shadow AI security metadata with
+          their organisation: recognised AI-service hostname, paste size, detection category, and
+          warning outcome. Never prompts, pasted text, secrets, full URLs, or URL paths.
+        </p>
 
         <label className="si-consent-check">
           <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />

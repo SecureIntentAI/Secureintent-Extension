@@ -134,7 +134,7 @@ the sources zip + §6 notes are what clear it.
 - **Name:** `SecureIntent`
 - **Add-on URL slug:** `secureintent`
 - **Summary (≤250 chars):**
-  > Warns you before you paste API keys, tokens, or passwords into AI chats and other sites — all on-device, your text never leaves.
+  > Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.
 - **Category:** Privacy & Security
 - **Description:** reuse the detailed description from [`docs/store-listing.md`](./store-listing.md) (plain text renders fine on AMO).
 - **Screenshots:** `store-assets/banner-1280x800.png` (add 2–3 more of the real warning overlay if available).

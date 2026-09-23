@@ -325,6 +325,12 @@ function Welcome() {
 
           <h1 className="w-title">Catch secrets before you paste</h1>
           <p className="w-sub">On-device protection for API keys, tokens, and passwords.</p>
+          <p className="w-sub w-shadow-notice">
+            If you are signed in to a Business organisation, Shadow AI sends that organisation
+            limited security metadata: recognised AI-service hostname, paste size, detection
+            category, and warning outcome. Prompts, pasted text, secret values, full URLs, and URL
+            paths never leave your browser.
+          </p>
 
           <label className="w-consent">
             <input
@@ -363,7 +369,7 @@ function Welcome() {
           <div className="w-trust">
             <span>On-device</span>
             <i />
-            <span>Zero retention</span>
+            <span>No raw-text retention</span>
           </div>
         </section>
       )}

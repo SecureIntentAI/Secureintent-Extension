@@ -6,7 +6,7 @@ import { browser, storage } from '#imports';
  * a consent screen. Stored in `sync` so it follows the user's Chrome profile
  * across devices. Bump TERMS_VERSION to re-prompt everyone after a terms change.
  */
-export const TERMS_VERSION = 1;
+export const TERMS_VERSION = 2;
 
 export const TOS_URL = 'https://secureintent.ai/tos';
 export const PRIVACY_URL = 'https://secureintent.ai/privacy';

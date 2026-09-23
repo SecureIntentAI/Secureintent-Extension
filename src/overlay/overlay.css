@@ -660,6 +660,10 @@
 .si-consent-text strong {
   color: var(--si-text);
 }
+.si-consent-text--shadow {
+  margin-top: 12px;
+  font-size: 12.5px;
+}
 .si-consent-links {
   margin: 12px 0 0;
   font-size: 13px;

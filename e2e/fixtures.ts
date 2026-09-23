@@ -54,7 +54,7 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
         await chrome.storage.local.remove(['si_config', 'si_config_synced']);
         // Pre-accept Terms & Privacy so guard-behavior specs exercise the paste
         // warning, not the first-run consent gate. The consent spec clears this.
-        await chrome.storage.sync.set({ si_terms_consent: { version: 1, acceptedAt: Date.now() } });
+        await chrome.storage.sync.set({ si_terms_consent: { version: 2, acceptedAt: Date.now() } });
       });
       await use(context);
       await context.close();

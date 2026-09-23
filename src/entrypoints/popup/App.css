@@ -994,6 +994,10 @@
   line-height: 1.5;
   color: var(--si-muted);
 }
+.si-consent-gate-text--shadow {
+  max-width: 34ch;
+  font-size: 11.5px;
+}
 .si-consent-check {
   position: relative;
   display: flex;

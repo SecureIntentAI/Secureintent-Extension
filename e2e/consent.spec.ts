@@ -61,7 +61,7 @@ test('consent gate blocks the first paste and unblocks after agreeing', async ({
 
   // Restore the pre-accepted state for any later specs in this worker.
   await sw.evaluate(() =>
-    chrome.storage.sync.set({ si_terms_consent: { version: 1, acceptedAt: Date.now() } }),
+    chrome.storage.sync.set({ si_terms_consent: { version: 2, acceptedAt: Date.now() } }),
   );
 });
 
@@ -80,8 +80,9 @@ test('welcome page: agree is gated on the checkbox and records consent', async (
 
   const agree = page.getByRole('button', { name: /Activate protection/i });
   await expect(agree).toBeDisabled(); // can't accept until the box is ticked
-  // Native checkbox is visually hidden (custom styled box) → click the wrapping label.
-  await page.locator('label.w-consent').click();
+  // Native checkbox is visually hidden; click its visible checkbox affordance,
+  // rather than the label centre (which can fall on the policy link).
+  await page.locator('label.w-consent .w-consent-box').click();
   await expect(page.getByRole('checkbox')).toBeChecked();
   await expect(agree).toBeEnabled();
   await agree.click();
@@ -91,6 +92,6 @@ test('welcome page: agree is gated on the checkbox and records consent', async (
   expect(stored.si_terms_consent).toBeTruthy();
 
   await sw.evaluate(() =>
-    chrome.storage.sync.set({ si_terms_consent: { version: 1, acceptedAt: Date.now() } }),
+    chrome.storage.sync.set({ si_terms_consent: { version: 2, acceptedAt: Date.now() } }),
   );
 });

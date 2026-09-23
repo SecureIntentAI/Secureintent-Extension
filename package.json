@@ -1,8 +1,8 @@
 {
   "name": "secureintent-extension",
-  "description": "Warns you before pasting API keys, tokens, or secrets into AI tools and other sites. On-device — your text never leaves the browser.",
+  "description": "Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "license": "UNLICENSED",
   "//core": "src/core.ts is an internal API barrel that groups the reusable guard/overlay/detection exports. No open-core split — this is a single extension with free and paid tiers (paid features gated at runtime by a signed entitlement). Not published as a package; stays private.",

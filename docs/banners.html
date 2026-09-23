@@ -247,7 +247,7 @@
         const pf = subf * 0.64;
         const py = subY + subf * 1.3;
         let px = padX;
-        for (const t of ["On-device", "Zero retention", "Free"]) {
+        for (const t of ["On-device", "No raw text", "Free"]) {
           px += pill(ctx, px, py, t, pf) + 10;
         }
       }
@@ -304,7 +304,7 @@
         ctx.fillText("On-device protection for API keys, tokens & passwords.", cx, H * 0.72);
         ctx.fillStyle = CYAN;
         ctx.font = `600 ${H * 0.026}px ${getMono()}`;
-        ctx.fillText("On-device   ·   Zero retention   ·   Free", cx, H * 0.83);
+        ctx.fillText("On-device   ·   No raw text   ·   Free", cx, H * 0.83);
         ctx.textAlign = "left";
       }
 
@@ -363,7 +363,7 @@
         ctx.fillText("On-device detection. Only a one-way hash is ever sent — never your secrets.", cx, H * 0.8);
         ctx.fillStyle = CYAN;
         ctx.font = `600 ${H * 0.025}px ${getMono()}`;
-        ctx.fillText("On-device   ·   Zero retention   ·   No tracking", cx, H * 0.9);
+        ctx.fillText("On-device   ·   No raw text   ·   Privacy first", cx, H * 0.9);
         ctx.textAlign = "left";
       }
 

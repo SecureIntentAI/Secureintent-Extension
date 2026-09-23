@@ -6,7 +6,7 @@ The **detailed description** is pasted into the Web Store dashboard.
 
 ## Short description (≤132 chars)
 
-> Warns you before you paste API keys, tokens, or passwords into AI chats and other sites — all on-device, your text never leaves.
+> Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.
 
 ## Detailed description
 

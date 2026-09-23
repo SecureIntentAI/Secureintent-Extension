@@ -120,6 +120,11 @@ body {
   line-height: 1.6;
   color: var(--si-muted);
 }
+.w-shadow-notice {
+  margin-top: -10px;
+  max-width: 48ch;
+  font-size: 12px;
+}
 /* ── Activation guide ──────────────────────────────────────────────────────
    Each step carries a small scene: a drawing of the exact interface it names.
    Step 2 is the one that matters, so it shows the real interception. */

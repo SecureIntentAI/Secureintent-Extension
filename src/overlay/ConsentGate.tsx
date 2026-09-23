@@ -60,8 +60,14 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
         <div className="si-consent-body">
           <h1 className="si-consent-title">One quick step before we protect your pastes</h1>
           <p className="si-consent-text">
-            SecureIntent analyzes pasted text <strong>on your device</strong> — your text never
-            leaves the browser. To enable protection, please agree to our terms.
+            SecureIntent analyzes pasted text <strong>on your device</strong>. Your pasted text
+            and secret values never leave the browser.
+          </p>
+          <p className="si-consent-text si-consent-text--shadow">
+            For signed-in Business organisation users, Shadow AI sends limited security metadata to
+            their organisation: recognised AI-service hostname, paste size, detection category, and
+            warning outcome. It never sends prompts, pasted text, secret values, full URLs, or URL
+            paths.
           </p>
           <p className="si-consent-links">
             <a href={TOS_URL} onClick={openPolicyPage(TOS_URL)}>

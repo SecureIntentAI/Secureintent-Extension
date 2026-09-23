@@ -41,7 +41,7 @@ export default defineConfig({
           }),
       name: 'SecureIntent',
       description:
-        'Warns you before you paste API keys, tokens, or passwords into AI chats and other sites — all on-device, your text never leaves.',
+        'Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.',
       // activeTab: read the current tab's URL (on popup open) to show which site
       // is being protected. No broad tabs permission needed.
       // cookies: required by @clerk/chrome-extension to read/sync the Clerk session

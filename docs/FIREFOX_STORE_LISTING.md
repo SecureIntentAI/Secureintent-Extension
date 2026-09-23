@@ -18,7 +18,7 @@ secureintent
 
 ## Summary  (AMO limit ~250 chars)
 ```
-Warns you before you paste API keys, tokens, or passwords into AI chats and other sites — all on-device, your text never leaves.
+Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.
 ```
 
 ## Description  (paste as-is — plain text, keep the • bullets and blank lines)
@@ -41,7 +41,7 @@ Free & Pro
 Core detection and warnings are free, including a monthly allowance of Anonymise & Paste. Pro unlocks unlimited Anonymise & Paste, large-log sanitizing, restoring anonymized values later in the same session, and a PIN lock for high-risk cloud consoles. Pro is entirely optional — the free protection works with no sign-up.
 
 Privacy first
-Raw pasted text never leaves your device. The extension only computes a salted, one-way hash on-device for anonymous reporting. No sign-up to get started, no browsing tracking, and we never sell your data.
+Raw pasted text, prompts, secrets, and URL paths never leave your device. The extension computes a salted, one-way hash on-device for anonymous reporting. For Business organisation members who accept the in-product disclosure, it also reports limited activity at recognised AI services: the service hostname, paste byte count, and secret-warning outcome. It never reports page content, URLs, prompts, or pasted text; free and Developer Pro installs do not send this Business metadata. We never sell your data.
 ```
 
 ## Category
