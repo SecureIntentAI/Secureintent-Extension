@@ -19,7 +19,7 @@ How it works
 • Detection runs entirely on your device. Your pasted text is never sent anywhere.
 • When a secret is detected, a warning appears with clear choices: Cancel, Paste anyway, or Paste anonymously — which redacts the secret and pastes the rest.
 • Pasting a large log? It can strip out secrets, IP addresses, and emails in one step before the text goes in.
-• Only an anonymous, one-way fingerprint of a detected secret is ever sent, and only for aggregate reporting — never the secret itself, and never your text.
+• Only an anonymous, one-way fingerprint of a detected secret is ever sent for aggregate reporting — never the secret itself, and never your text.
 
 What it detects
 A wide range of credentials: API keys and access tokens from major cloud and developer platforms, private keys, high-entropy secrets, and common key = value credential patterns. Broad matches (such as card numbers) are confirmed by on-device validators to keep false positives low.
@@ -31,4 +31,11 @@ Free & Pro
 Core detection and warnings are free, including a monthly allowance of Anonymise & Paste. Pro unlocks unlimited Anonymise & Paste, large-log sanitizing, restoring anonymized values later in the same session, and a PIN lock for high-risk cloud consoles. Pro is entirely optional — the free protection works with no sign-up.
 
 Privacy first
-Raw pasted text never leaves your device. The extension only computes a salted, one-way hash on-device for anonymous reporting. No sign-up to get started, no browsing tracking, and we never sell your data.
+Raw pasted text, prompts, secrets, and URL paths never leave your device. The extension computes a salted, one-way hash on-device for anonymous reporting. For Business organisation members who accept the in-product disclosure, it also reports limited activity at recognised AI services: the service hostname, paste byte count, and secret-warning outcome. It never reports page content, URLs, prompts, or pasted text; free and Developer Pro installs do not send this Business metadata. We never sell your data.
+
+## Chrome Web Store dashboard disclosure
+
+Before submitting this release, update the Store's data-use answers to match the
+copy above: Shadow AI is optional Business-org telemetry after in-product consent,
+uses recognised service hostname plus interaction metadata, and does **not** collect
+website content, URL paths/query strings, prompts, pasted text, or secret values.
