@@ -19,6 +19,19 @@ describe('detectSecrets — known keys', () => {
     expect(aws?.match).toBe('AKIAIOSFODNN7EXAMPLE');
   });
 
+  test('detects temporary AWS keys, JSON secrets, and newer vendor keys', () => {
+    const samples = [
+      ['ASIAIOSFODNN7EXAMPLE', 'AWS access key ID'],
+      ['{"api_key":"wJalrXUtnFEMI7MDENG"}', 'JSON credential'],
+      ['pplx-' + 'a'.repeat(32), 'Perplexity API key'],
+      ['gsk_' + 'b'.repeat(32), 'Groq API key'],
+      ['xai-' + 'c'.repeat(32), 'xAI API key'],
+    ] as const;
+    for (const [text, label] of samples) {
+      expect(detectSecrets(text).some((d) => d.label === label)).toBe(true);
+    }
+  });
+
   test('detects a GitHub personal access token', () => {
     const token = 'ghp_' + 'a'.repeat(36);
     const dets = detectSecrets(`token=${token}`);

@@ -1,5 +1,9 @@
 // raw base64 Ed25519 public key; matches the Worker's signing key
-const PUBLIC_KEY_B64 = 'kn2gVKuqNXC+NKdoM7tST6j+jPAKFQrh5Q/S99uCFDY=';
+// Test artifacts are separate builds; never distribute a WXT_E2E build.
+const PUBLIC_KEY_B64 =
+  import.meta.env.WXT_E2E === '1'
+    ? 'iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w='
+    : 'kn2gVKuqNXC+NKdoM7tST6j+jPAKFQrh5Q/S99uCFDY=';
 
 let keyPromise: Promise<CryptoKey> | null = null;
 function publicKey(): Promise<CryptoKey> {

@@ -3,19 +3,22 @@ import { bumpBadge, clearBadge } from '@/lib/badge';
 import { sendBrowserUrl, sendHandledHash } from '@/lib/bridge/client';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL } from '@/lib/clerkConfig';
-import { consentItem, isConsentAccepted } from '@/lib/consent';
+import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 import { PASTE_READY } from '@/lib/paste/protocol';
-import { allowVaultInContentScripts } from '@/lib/vault';
-import { syncConfig } from '@/services/configService';
+import { offlineConsume } from '@/lib/quota/offline';
+import { invalidateConfigSync, syncConfig } from '@/services/configService';
 import {
   consumeUsage,
   getUsageStatus,
   invalidateEntitlementRefresh,
   refreshEntitlementBg,
 } from '@/services/entitlementBackground';
+import { injectOpenTabs } from '@/services/injectOpenTabs';
 import { markInstallPending, reportInstall, syncUninstallUrl } from '@/services/installAttribution';
 import { installPasteWorkerBackground } from '@/services/pasteWorkerBackground';
 import { handleRefreshMessage, SYNC_ALARM } from '@/services/scheduler';
+import { flushShadow, installShadowBackground, recordShadow } from '@/services/shadowBackground';
+import { installVaultBackground } from '@/services/vaultBackground';
 import { isBridgeEnabled } from '@/settings';
 
 const WELCOME_URL = '/welcome.html';
@@ -32,6 +35,8 @@ async function updateConsentBadge() {
 
 export default defineBackground(() => {
   installPasteWorkerBackground();
+  installVaultBackground();
+  installShadowBackground();
   // First install → open the welcome/consent page. Any startup → refresh the
   // consent badge (nag until Terms & Privacy are accepted).
   browser.runtime.onInstalled.addListener((details) => {
@@ -40,6 +45,11 @@ export default defineBackground(() => {
       // Arm the install report (every install, creator or not — see the module
       // note). On Firefox it waits for the Terms accept below.
       markInstallPending().then(() => reportInstall());
+    }
+    // A page that was already open does not receive manifest content scripts.
+    // Install and reload both need the guard attached to those tabs.
+    if (details.reason === 'install' || details.reason === 'update') {
+      void injectOpenTabs();
     }
     updateConsentBadge();
     // Nothing of ours runs at uninstall time, so the address the browser opens
@@ -69,14 +79,14 @@ export default defineBackground(() => {
   browser.storage.onChanged.addListener((changes) => {
     if (!Object.keys(changes).some((k) => k.toLowerCase().includes('clerk'))) return;
     invalidateEntitlementRefresh(); // invalidate immediately, before the debounce
+    invalidateConfigSync();
     clearTimeout(entRefreshTimer);
     entRefreshTimer = setTimeout(() => {
-      void refreshEntitlementBg();
+      void refreshEntitlementBg().then(() => syncConfig());
     }, 500); // debounce Clerk's burst of session writes
   });
 
-  // Let content scripts read/write the rehydration vault in storage.session.
-  allowVaultInContentScripts(browser.storage.session);
+  // Vault reads/writes are served by the origin-bound background handler.
   syncConfig();
   // Sync plan on startup, then drop any cached entitlement that isn't for the
   // currently signed-in user (a signed blob is otherwise portable between installs).
@@ -87,11 +97,32 @@ export default defineBackground(() => {
       syncConfig();
       void refreshEntitlementBg(); // ride the existing 2h alarm
       reportInstall(); // retry an install report that couldn't send (offline at install)
+      void flushShadow();
     }
   });
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
+    if (type === 'si-vault-put' || type === 'si-vault-read') return false;
+    if (type === 'si-open-settings') {
+      void browser.tabs.create({ url: browser.runtime.getURL('/popup.html') }).catch(() => {});
+      return false;
+    }
     if (type === PASTE_READY) return false; // the private worker setup listener owns this response
+    if (
+      type === 'si-shadow-visit' ||
+      type === 'si-shadow-paste-volume' ||
+      type === 'si-shadow-dlp'
+    ) {
+      const source = {
+        url: sender.url,
+        frameId: sender.frameId,
+        incognito: sender.tab?.incognito,
+      };
+      void recordShadow(msg, source)
+        .then(() => flushShadow())
+        .catch(() => {});
+      return false;
+    }
     // Per-tab badge: a content script reports how many secrets it just caught.
     if (type === 'si-detected' && sender.tab?.id != null) {
       bumpBadge(sender.tab.id, (msg as { count?: number }).count ?? 1);
@@ -102,6 +133,11 @@ export default defineBackground(() => {
     // button opens ACCOUNT_URL directly — same destination, no message needed.)
     if (type === 'si-open-upgrade') {
       browser.tabs.create({ url: ACCOUNT_URL }).catch(() => {});
+      return false;
+    }
+    if (type === 'si-open-page') {
+      const url = (msg as { url?: string }).url;
+      if (url === TOS_URL || url === PRIVACY_URL) browser.tabs.create({ url }).catch(() => {});
       return false;
     }
     // A content script says where its focused tab is. Pass it to the desktop
@@ -145,7 +181,10 @@ export default defineBackground(() => {
       return true;
     }
     if (type === 'si-quota-consume') {
-      consumeUsage().then(sendResponse);
+      consumeUsage()
+        .then((result) => result ?? offlineConsume())
+        .then(sendResponse)
+        .catch(() => sendResponse({ allowed: false }));
       return true;
     }
     // Popup asked to refresh the entitlement (e.g. after sign-in / returning from checkout).

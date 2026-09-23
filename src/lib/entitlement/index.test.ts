@@ -87,6 +87,22 @@ describe('evaluateBlob', () => {
 });
 
 describe('evaluateStored', () => {
+  test('ignores unsigned edits to the duplicate blob', async () => {
+    const signed = proBlob({ pro: false, features: [], plan: 'developer' });
+    const out = await evaluateStored(
+      { blob: proBlob(), payload: JSON.stringify(signed), signature: 'valid' },
+      1500,
+    );
+    expect(out.pro).toBe(false);
+    expect(out.features).toEqual([]);
+  });
+  test('rejects malformed signed payloads', async () => {
+    for (const payload of ['null', '{}', 'invalid']) {
+      expect(await evaluateStored({ blob: proBlob(), payload, signature: 'valid' }, 1500)).toEqual(
+        FREE_ENTITLEMENT,
+      );
+    }
+  });
   test('null → free', async () => {
     expect(await evaluateStored(null, 1500)).toEqual({
       plan: 'developer',

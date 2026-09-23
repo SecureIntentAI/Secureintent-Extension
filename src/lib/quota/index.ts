@@ -1,6 +1,6 @@
 import { browser } from '#imports';
 import type { EntitlementSnapshot } from '@/lib/entitlement';
-import { OFFLINE_LIMIT, offlineConsume, offlineUsed } from './offline';
+import { OFFLINE_LIMIT, offlineUsed } from './offline';
 
 export { formatQuotaReset, quotaResetAt } from './reset';
 
@@ -48,12 +48,12 @@ export async function canAnonymize(snap: EntitlementSnapshot): Promise<boolean> 
 /** Consume one anonymize. Returns whether it was allowed (Pro is always allowed). */
 export async function consumeAnonymize(snap: EntitlementSnapshot): Promise<boolean> {
   if (snap.pro) return true;
-  if (snap.signedIn) {
+  {
     const r = (await browser.runtime
       .sendMessage({ type: 'si-quota-consume' })
       .catch(() => null)) as { allowed?: boolean } | null;
     if (r && typeof r.allowed === 'boolean') return r.allowed;
-    // backend unreachable — fall through to the on-device count so we don't block.
+    // The background is the sole writer of the offline allowance across tabs.
   }
-  return (await offlineConsume()).allowed;
+  return false;
 }

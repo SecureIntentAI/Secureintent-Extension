@@ -1,10 +1,10 @@
 # Phase One Extension Development — Shadow AI Discovery V1
 
-- **Status:** Local/staging implementation complete and published on non-main branches
+- **Status:** Discovery now runs in the production extension on `shadow-ai-features` for a real Business organisation. The local harness and synthetic seat described later in this record have been removed.
 - **Recorded:** 10 September 2026
-- **Last updated:** 10 September 2026
-- **Integration branch:** `demo/shadow-ai-v1`
-- **Production status:** Not merged into `main`, deployed, or submitted to a browser store
+- **Last updated:** 23 September 2026
+- **Integration branch:** `shadow-ai-features`
+- **Production status:** Not merged into `main` and not submitted to a browser store. The API route is in `secureintent-backend-v2` and still needs a deploy.
 
 ## 1. Purpose
 

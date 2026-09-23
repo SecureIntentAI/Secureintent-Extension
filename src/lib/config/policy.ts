@@ -1,4 +1,4 @@
-import type { BundlePolicy, ConfigBundle } from './types';
+import type { AiServiceRule, BundlePolicy, ConfigBundle } from './types';
 
 /**
  * The policy every non-team install runs under: nothing enforced. Returned as a
@@ -11,7 +11,34 @@ function emptyPolicy(): BundlePolicy {
     requireSessionLock: false,
     extraPatterns: [],
     blockedSites: [],
+    aiServices: [],
   };
+}
+
+const CLASSIFICATIONS = new Set(['sanctioned', 'recognized', 'review']);
+
+function normalizeAiServices(value: unknown): AiServiceRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: AiServiceRule[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const rule = item as Record<string, unknown>;
+    if (
+      typeof rule.serviceId !== 'string' ||
+      rule.serviceId.length === 0 ||
+      rule.serviceId.length > 40
+    )
+      continue;
+    if (!CLASSIFICATIONS.has(String(rule.classification))) continue;
+    if (typeof rule.pasteBlocked !== 'boolean') continue;
+    rules.push({
+      serviceId: rule.serviceId,
+      classification: rule.classification as AiServiceRule['classification'],
+      pasteBlocked: rule.pasteBlocked,
+    });
+    if (rules.length >= 18) break;
+  }
+  return rules;
 }
 
 /**
@@ -52,7 +79,16 @@ export function getPolicy(bundle: Pick<ConfigBundle, 'policy'> | null | undefine
           .map(normalizeHost)
           .filter((s) => s.length > 0)
       : [],
+    aiServices: normalizeAiServices(p.aiServices),
   };
+}
+
+/** Organisation policy forbids pasting into this recognised AI tool. */
+export function aiPasteBlocked(policy: BundlePolicy, serviceId: string | undefined): boolean {
+  if (!serviceId) return false;
+  return (
+    policy.aiServices?.some((rule) => rule.serviceId === serviceId && rule.pasteBlocked) === true
+  );
 }
 
 /**

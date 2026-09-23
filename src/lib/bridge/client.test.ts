@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { bridgeTokenItem } from '@/settings';
+import { bridgeProof } from './auth';
 import { sendBrowserUrl, sendHandledHash } from './client';
 
 const TOKEN = 'pairing-token';
@@ -10,7 +11,7 @@ const TOKEN = 'pairing-token';
  * squatted, 8139 is the agent" and check we end up on 8139. It also checks the
  * token, because refusing a bad one is behaviour we depend on.
  */
-type Behaviour = 'agent' | 'dead';
+type Behaviour = 'agent' | 'dead' | 'squatter';
 let behaviour: Record<number, Behaviour> = {};
 let opened: number[] = [];
 let sent: Array<{ port: number; raw: string }> = [];
@@ -21,6 +22,8 @@ class FakeSocket {
   onerror: (() => void) | null = null;
   onclose: (() => void) | null = null;
   private port: number;
+  private nonce = '';
+  private serverNonce = 'server-random-nonce-123456789';
 
   constructor(url: string) {
     this.port = Number(new URL(url).port);
@@ -31,11 +34,24 @@ class FakeSocket {
     });
   }
 
-  send(raw: string) {
+  async send(raw: string) {
     const frame = JSON.parse(raw);
-    if (frame.type === 'hello') {
-      const ok = frame.token === TOKEN;
-      queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ type: 'welcome', ok }) }));
+    if (raw.includes(TOKEN)) throw new Error('Pairing key disclosed');
+    if (frame.type === 'hello_v2') {
+      this.nonce = frame.nonce;
+      if (behaviour[this.port] === 'squatter') {
+        this.onmessage?.({ data: JSON.stringify({ type: 'welcome', ok: true }) });
+        return;
+      }
+      const proof = await bridgeProof(TOKEN, 'server', this.nonce, this.serverNonce);
+      this.onmessage?.({
+        data: JSON.stringify({ type: 'challenge_v2', nonce: this.serverNonce, proof }),
+      });
+      return;
+    }
+    if (frame.type === 'authenticate_v2') {
+      const ok = frame.proof === (await bridgeProof(TOKEN, 'client', this.nonce, this.serverNonce));
+      this.onmessage?.({ data: JSON.stringify({ type: 'welcome_v2', ok }) });
       return;
     }
     sent.push({ port: this.port, raw });
@@ -54,6 +70,11 @@ beforeEach(async () => {
 });
 
 describe('pairing', () => {
+  test('a port squatter receives neither the token nor activity', async () => {
+    behaviour = { 8137: 'squatter', 8138: 'agent' };
+    expect(await sendBrowserUrl('localhost', 3000)).toBe(true);
+    expect(sent.map((s) => s.port)).toEqual([8138]);
+  });
   test('says nothing at all until a token is saved', async () => {
     await bridgeTokenItem.setValue(null);
     behaviour = { 8137: 'agent' };

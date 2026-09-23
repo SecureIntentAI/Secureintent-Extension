@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { REQUEST_TIMEOUT_MS } from '../async';
 import { createPasteProcessor } from './client';
-import { PASTE_READY, type PasteReply } from './protocol';
+import { PASTE_READY, PASTE_REQUEST_TIMEOUT_MS, type PasteReply } from './protocol';
 
 function setup() {
   let onReply: ((reply: PasteReply) => void) | undefined;
@@ -77,7 +76,7 @@ test('a dropped host has a backup deadline and closes the port', async () => {
   const client = await t.start();
   const work = client.request('sanitize', null);
   const assertion = expect(work).rejects.toThrow();
-  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+  await vi.advanceTimersByTimeAsync(PASTE_REQUEST_TIMEOUT_MS);
   await assertion;
   expect(t.port.disconnect).toHaveBeenCalledTimes(1);
 });

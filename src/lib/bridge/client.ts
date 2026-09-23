@@ -22,6 +22,7 @@
 import { storage } from '#imports';
 import { siDebug } from '@/lib/debug';
 import { bridgeTokenItem } from '@/settings';
+import { bridgeProof, equalProof } from './auth';
 import { handledFrame } from './hash';
 import { BRIDGE_PORTS, type BrowserUrlMessage, HANDLED_TTL_MS } from './types';
 
@@ -62,17 +63,43 @@ function speak(port: number, token: string, frame: string): Promise<boolean> {
     }
     const timer = setTimeout(() => done(false), CONNECT_TIMEOUT_MS);
 
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', token }));
+    const nonce = crypto.randomUUID();
+    let authenticated = false;
+    let challenged = false;
+    ws.onopen = () => {
+      try {
+        ws.send(JSON.stringify({ type: 'hello_v2', nonce }));
+      } catch {
+        done(false);
+      }
+    };
     ws.onerror = () => done(false);
     ws.onclose = () => done(false); // closed before we saw a welcome
-    ws.onmessage = (ev) => {
-      let msg: { type?: string; ok?: boolean };
+    ws.onmessage = async (ev) => {
+      if (settled) return;
+      let msg: { type?: string; ok?: boolean; nonce?: string; proof?: string };
       try {
         msg = JSON.parse(String(ev.data));
       } catch {
         return; // malformed frames are ignored, not fatal
       }
-      if (msg.type !== 'welcome') return;
+      if (msg.type === 'challenge_v2' && !challenged) {
+        challenged = true;
+        if (typeof msg.nonce !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/.test(msg.nonce))
+          return done(false);
+        try {
+          const expected = await bridgeProof(token, 'server', nonce, msg.nonce);
+          if (settled || !equalProof(msg.proof, expected)) return done(false);
+          const proof = await bridgeProof(token, 'client', nonce, msg.nonce);
+          if (settled) return;
+          authenticated = true;
+          ws.send(JSON.stringify({ type: 'authenticate_v2', proof }));
+        } catch {
+          done(false);
+        }
+        return;
+      }
+      if (msg.type !== 'welcome_v2' || !authenticated) return done(false);
       if (!msg.ok) return done(false); // token refused
       try {
         ws.send(frame);
@@ -87,9 +114,8 @@ function speak(port: number, token: string, frame: string): Promise<boolean> {
 /**
  * Send one frame to the agent, finding it if we have to.
  *
- * Tries the remembered port first, then walks the range. A squatter can't
- * intercept this: it would have to answer the handshake for a token it never
- * issued, so the scan is also the authentication.
+ * Tries the remembered port, then the range. The peer must prove possession of
+ * the key before receiving any activity. Legacy plaintext-token peers fail closed.
  */
 async function send(frame: string): Promise<boolean> {
   const token = await bridgeTokenItem.getValue();

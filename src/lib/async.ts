@@ -19,10 +19,11 @@ export const REQUEST_TIMEOUT_MS = 10_000;
 export async function withDeadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
   controller = new AbortController(),
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const timer = setTimeout(
     () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
-    REQUEST_TIMEOUT_MS,
+    timeoutMs,
   );
   try {
     return await abortable(work(controller.signal), controller.signal);

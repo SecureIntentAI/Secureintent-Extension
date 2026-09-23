@@ -1,4 +1,5 @@
 import { getJson } from '@/lib/api/client';
+import { shouldAcceptBundle } from '@/lib/config/freshness';
 import { configItem, saveBundle } from '@/lib/config/store';
 import type { ConfigBundle } from '@/lib/config/types';
 import { validateBundle } from '@/lib/config/validate';
@@ -21,21 +22,28 @@ export interface SyncResult {
  * that channel also carries the kill switch and the pattern updates, so it has
  * to keep working anonymously exactly as it did before Team Policy Sync.
  */
-async function authHeaders(): Promise<Record<string, string> | undefined> {
+async function authHeaders(): Promise<{
+  headers?: Record<string, string>;
+  authenticated: boolean;
+}> {
   try {
     const token = await getClerkToken();
-    return token ? { Authorization: `Bearer ${token}` } : undefined;
+    return token
+      ? { headers: { Authorization: `Bearer ${token}` }, authenticated: true }
+      : { authenticated: false };
   } catch (err) {
     siError('config', 'token unavailable, syncing anonymously', err);
-    return undefined;
+    return { authenticated: false };
   }
 }
 
 export async function syncConfig(): Promise<SyncResult> {
+  const request = ++syncRevision;
   try {
+    const { headers, authenticated } = await authHeaders();
     const { bundle, signature } = await getJson<{ bundle: unknown; signature: string | null }>(
       '/v1/config',
-      await authHeaders(),
+      headers,
     );
     if (!validateBundle(bundle)) return { status: 'error', error: 'invalid bundle' };
 
@@ -48,12 +56,18 @@ export async function syncConfig(): Promise<SyncResult> {
     }
 
     const current = await configItem.getValue();
-    if (current && incoming.version <= current.version) {
-      return { status: 'unchanged', version: current.version };
+    if (request !== syncRevision) return { status: 'unchanged', version: current?.version };
+    if (!shouldAcceptBundle(current, incoming, authenticated)) {
+      return { status: 'unchanged', version: current?.version };
     }
     await saveBundle(incoming);
     return { status: 'updated', version: incoming.version };
   } catch (e) {
     return { status: 'error', error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+let syncRevision = 0;
+export function invalidateConfigSync(): void {
+  syncRevision++;
 }

@@ -1,6 +1,6 @@
 import { AI_CATALOG, normalizeHostname, recognizeAiPage } from './catalog';
 
-export const QUEUE_LIMIT = 500;
+export const QUEUE_LIMIT = 5000;
 export const VISIT_TTL = 86_400_000;
 export type VisitEvent = {
   schemaVersion: 1;
@@ -46,44 +46,30 @@ export type ShadowPolicy = {
     pasteBlocked: boolean;
   }[];
 };
-export type TestSession = {
-  token: string;
-  seatId: string;
-  seatLabel: string;
-  orgId: string | null;
+/** A real Clerk organisation seat. Discovery does not run for any other plan. */
+export type DiscoverySeat = {
   plan: string;
-  expiresAt: number;
-  localOnly: true;
+  orgId: string | null;
 };
 export type VisitState = {
-  session: TestSession | null;
   queue: ShadowEvent[];
   seen: { eventId: string; timestamp: number }[];
   dropped: number;
   lastSync: number | null;
-  policy: ShadowPolicy | null;
-  policyFetchedAt: number | null;
   error: string | null;
 };
 export const emptyVisitState = (): VisitState => ({
-  session: null,
   queue: [],
   seen: [],
   dropped: 0,
   lastSync: null,
-  policy: null,
-  policyFetchedAt: null,
   error: null,
 });
 
-export function canDiscover(session: TestSession | null, now: number): boolean {
-  return (
-    !!session &&
-    session.localOnly === true &&
-    session.plan === 'business_pro' &&
-    !!session.orgId &&
-    session.expiresAt > now
-  );
+const ORG_ID = /^org_[A-Za-z0-9]{1,60}$/;
+
+export function canDiscover(seat: DiscoverySeat | null): boolean {
+  return !!seat && seat.plan === 'business_pro' && !!seat.orgId && ORG_ID.test(seat.orgId);
 }
 
 /** Browser-supplied URL is transient input; only a catalog hostname survives. */
@@ -208,12 +194,18 @@ export function makeDlpEvent(
   };
 }
 
-export function enqueueEvent(state: VisitState, event: ShadowEvent, now: number): VisitState {
-  if (!canDiscover(state.session, now))
-    return {
-      ...emptyVisitState(),
-      error: state.session ? 'Test session expired or not Business' : null,
-    };
+export function enqueueEvent(
+  state: VisitState,
+  event: ShadowEvent,
+  now: number,
+  seat: DiscoverySeat | null,
+): VisitState {
+  // A seat that is not a Business organisation must not keep metadata that could
+  // be uploaded later under a different account.
+  if (!canDiscover(seat)) {
+    if (state.queue.length === 0 && state.seen.length === 0) return state;
+    return { ...emptyVisitState(), dropped: state.dropped + state.queue.length };
+  }
   const queue = state.queue.filter((item) => item.timestamp >= now - VISIT_TTL);
   const seen = state.seen.filter((item) => item.timestamp >= now - VISIT_TTL);
   if (seen.some((item) => item.eventId === event.eventId)) return { ...state, queue, seen };

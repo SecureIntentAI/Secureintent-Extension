@@ -11,6 +11,16 @@ import * as telemetryService from '@/services/telemetryService';
 import { getBlockedCount, setEnabled } from '@/settings';
 import { ASYNC_PASTE_CHARS, createPasteGuard, MAX_PASTE_CHARS } from './createPasteGuard';
 
+vi.mock('@/lib/vault/client', async () => {
+  const { handleVaultMessage } = await import('@/services/vaultBackground');
+  return {
+    storeVaultEntries: async (entries: import('@/lib/detection').VaultEntry[]) =>
+      handleVaultMessage({ type: 'si-vault-put', entries }, location.href),
+    readVaultEntries: async () =>
+      (await handleVaultMessage({ type: 'si-vault-read' }, location.href)).entries,
+  };
+});
+
 // Mock the shadow-DOM overlay: capture props, return a fake handle.
 const { mountOverlayMock } = vi.hoisted(() => ({ mountOverlayMock: vi.fn() }));
 vi.mock('../overlay/mount', () => ({ mountOverlay: mountOverlayMock }));
@@ -139,10 +149,52 @@ describe('createPasteGuard', () => {
     mountConsentGateMock.mockResolvedValue({ remove: vi.fn() });
     document.execCommand = vi.fn(() => true);
     sendTelemetrySpy.mockClear();
-    // reset the cross-content-script "a dedicated guard is active" window flag
-    (window as unknown as Record<string, boolean>).__secureintentDedicated__ = false;
+    for (const key of Object.keys(window as unknown as Record<string, unknown>)) {
+      if (key.startsWith('__secureintent')) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
+    }
   });
   afterEach(() => document.body.replaceChildren());
+
+  test('live policy replacement cancels an old decision and blocks the next clean paste', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const oldAction = lastOnAction();
+    const oldUi = await mountOverlayMock.mock.results.at(-1)!.value;
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      policy: {
+        blockInsteadOfWarn: true,
+        requireSessionLock: false,
+        blockedSites: [location.hostname],
+      },
+    });
+    await vi.waitFor(() => expect(oldUi.remove).toHaveBeenCalled());
+    await oldAction('paste');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    await t.firePaste(t.makeEvent('ordinary safe message'));
+    expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({ host: location.hostname });
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  test('vault expiry is checked again in a long-lived page', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    await lastOnAction()('redact');
+    const inserted = vi.mocked(document.execCommand).mock.calls.at(-1)![2] as string;
+    vi.mocked(document.execCommand).mockClear();
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(realNow + 3_600_001);
+    try {
+      await t.firePaste(t.makeEvent(inserted));
+      expect(document.execCommand).toHaveBeenLastCalledWith('insertText', false, inserted);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   test('unconsented first paste shows the consent gate (not the warning); agreeing then warns', async () => {
     await consentItem.setValue(null); // Terms not yet accepted
@@ -175,6 +227,18 @@ describe('createPasteGuard', () => {
     expect(mountOverlayMock).not.toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
     expect(await consentItem.getValue()).toBeNull(); // still not accepted
+  });
+
+  test('a ChatGPT contenteditable that is not #prompt-textarea is still checked', async () => {
+    const t = setup();
+    const editor = document.createElement('div');
+    editor.setAttribute('contenteditable', 'true');
+    document.body.appendChild(editor);
+    await t.start();
+    const ev = t.makeEvent('AKIAIOSFODNN7EXAMPLE', editor);
+    await t.firePaste(ev);
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(mountOverlayMock).toHaveBeenCalled();
   });
 
   test('inserts a clean paste only after the worker scan completes', async () => {
@@ -434,7 +498,7 @@ describe('createPasteGuard', () => {
   test('ignores pastes targeted outside the input', async () => {
     const t = setup();
     await t.start();
-    const outside = document.createElement('textarea');
+    const outside = document.createElement('button');
     document.body.appendChild(outside);
     const e = t.makeEvent(`here ${SECRET} end`, outside);
     await t.firePaste(e);
@@ -759,10 +823,10 @@ describe('createPasteGuard', () => {
     await saveBundle({ ...DEFAULT_BUNDLE, sites: { chatgpt: { inputSelector: '#custom-input' } } });
 
     // Build a harness that uses the bundle selector, not the fallback
-    let handler: ((e: unknown) => unknown) | undefined;
+    const handlers: Record<string, (e: unknown) => unknown> = {};
     const ctx = {
-      addEventListener: (_t: unknown, _type: string, cb: (e: unknown) => unknown) => {
-        handler = cb;
+      addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => {
+        handlers[type] = cb;
       },
     };
     const customInput = document.createElement('div');
@@ -779,7 +843,7 @@ describe('createPasteGuard', () => {
       stopImmediatePropagation: vi.fn(),
       composedPath: () => composedPathFrom(customInput),
     };
-    await handler?.(e);
+    await handlers.paste?.(e);
 
     // The guard should have matched the bundle's #custom-input and blocked the paste
     expect(e.preventDefault).toHaveBeenCalled();
@@ -790,10 +854,10 @@ describe('createPasteGuard', () => {
     const commaSelector = 'textarea[name="title"], div[contenteditable="true"][name="body"]';
     await saveBundle({ ...DEFAULT_BUNDLE, sites: { reddit: { inputSelector: commaSelector } } });
 
-    let handler: ((e: unknown) => unknown) | undefined;
+    const handlers: Record<string, (e: unknown) => unknown> = {};
     const ctx = {
-      addEventListener: (_t: unknown, _type: string, cb: (e: unknown) => unknown) => {
-        handler = cb;
+      addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => {
+        handlers[type] = cb;
       },
     };
 
@@ -812,7 +876,7 @@ describe('createPasteGuard', () => {
       stopImmediatePropagation: vi.fn(),
       composedPath: () => composedPathFrom(bodyDiv),
     };
-    await handler?.(e);
+    await handlers.paste?.(e);
 
     expect(e.preventDefault).toHaveBeenCalled();
     expect(mountOverlayMock).toHaveBeenCalledTimes(1);
@@ -891,7 +955,11 @@ describe('createPasteGuard — team policy', () => {
     mountConsentGateMock.mockResolvedValue({ remove: vi.fn() });
     document.execCommand = vi.fn(() => true);
     sendTelemetrySpy.mockClear();
-    (window as unknown as Record<string, boolean>).__secureintentDedicated__ = false;
+    for (const key of Object.keys(window as unknown as Record<string, unknown>)) {
+      if (key.startsWith('__secureintent')) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
+    }
   });
   afterEach(() => document.body.replaceChildren());
 
@@ -900,6 +968,7 @@ describe('createPasteGuard — team policy', () => {
   const savePolicy = (over: Partial<BundlePolicy>) =>
     saveBundle({
       ...DEFAULT_BUNDLE,
+      policyVersion: 7,
       policy: {
         blockInsteadOfWarn: false,
         requireSessionLock: false,
@@ -986,6 +1055,7 @@ describe('createPasteGuard — team policy', () => {
         return call![0];
       });
       expect(event.action).toBe('cancelled');
+      expect(event.policyVersion).toBe(7);
     });
 
     test('the anonymise path stays available', async () => {
@@ -1098,6 +1168,7 @@ describe('createPasteGuard — team policy', () => {
         .match(/⟦SI:[0-9a-f]{8}⟧/)![0];
 
       await savePolicy({ blockedSites: [location.hostname] });
+      delete (window as unknown as Record<string, unknown>).__secureintentStarted_chatgpt__;
       const t2 = setup();
       await t2.start();
       mountOverlayMock.mockClear();
@@ -1132,7 +1203,11 @@ describe('createPasteGuard — team patterns (origin)', () => {
     mountConsentGateMock.mockResolvedValue({ remove: vi.fn() });
     document.execCommand = vi.fn(() => true);
     sendTelemetrySpy.mockClear();
-    (window as unknown as Record<string, boolean>).__secureintentDedicated__ = false;
+    for (const key of Object.keys(window as unknown as Record<string, unknown>)) {
+      if (key.startsWith('__secureintent')) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
+    }
   });
   afterEach(() => document.body.replaceChildren());
 
@@ -1203,15 +1278,19 @@ describe('fallback guard (catch-all)', () => {
     mountConsentGateMock.mockReset();
     mountConsentGateMock.mockResolvedValue({ remove: vi.fn() });
     document.execCommand = vi.fn(() => true);
-    (window as unknown as Record<string, boolean>).__secureintentDedicated__ = false;
+    for (const key of Object.keys(window as unknown as Record<string, unknown>)) {
+      if (key.startsWith('__secureintent')) {
+        delete (window as unknown as Record<string, unknown>)[key];
+      }
+    }
   });
   afterEach(() => document.body.replaceChildren());
 
   function setupFallback() {
-    let handler: ((e: unknown) => unknown) | undefined;
+    const handlers: Record<string, (e: unknown) => unknown> = {};
     const ctx = {
-      addEventListener: (_t: unknown, _type: string, cb: (e: unknown) => unknown) => {
-        handler = cb;
+      addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => {
+        handlers[type] = cb;
       },
     };
     const input = document.createElement('textarea'); // matches the generic fallback selector
@@ -1227,7 +1306,7 @@ describe('fallback guard (catch-all)', () => {
     return {
       e,
       start: () => createPasteGuard(ctx as never, { name: 'example.com', siteKey: 'fallback' }),
-      firePaste: () => handler?.(e),
+      firePaste: () => handlers.paste?.(e),
     };
   }
 

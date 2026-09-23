@@ -28,6 +28,8 @@ export interface BundleSite {
  * `/v1/config`; anonymous and non-team installs get a bundle with no `policy`.
  */
 export interface BundlePolicy {
+  /** Clerk organisation these rules belong to. Absent on bundles saved before it was sent. */
+  orgId?: string;
   /** Drop "Paste anyway" from the warning: the warning becomes a block. */
   blockInsteadOfWarn: boolean;
   /** Force Session Lock on; the member cannot switch it off. */
@@ -40,6 +42,18 @@ export interface BundlePolicy {
   extraPatterns?: BundlePattern[];
   /** Hostnames this team must not paste into at all (subdomains included). */
   blockedSites: string[];
+  /**
+   * Per-tool Shadow AI rules for this organisation. Absent on bundles from a
+   * Worker that has not published any, which means every recognised tool stays
+   * visible and pasteable.
+   */
+  aiServices?: AiServiceRule[];
+}
+
+export interface AiServiceRule {
+  serviceId: string;
+  classification: 'sanctioned' | 'recognized' | 'review';
+  pasteBlocked: boolean;
 }
 export interface ConfigBundle {
   version: number;

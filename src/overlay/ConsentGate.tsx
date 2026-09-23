@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Logo } from '@/components/Logo';
-import { PRIVACY_URL, TOS_URL } from '@/lib/consent';
+import { openPolicyPage, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 
 export interface ConsentGateProps {
   /** Accept the current Terms & Privacy. */
@@ -64,11 +64,11 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
             leaves the browser. To enable protection, please agree to our terms.
           </p>
           <p className="si-consent-links">
-            <a href={TOS_URL} target="_blank" rel="noreferrer">
+            <a href={TOS_URL} onClick={openPolicyPage(TOS_URL)}>
               Terms of Service
             </a>
             <span aria-hidden="true"> · </span>
-            <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
+            <a href={PRIVACY_URL} onClick={openPolicyPage(PRIVACY_URL)}>
               Privacy Policy
             </a>
           </p>

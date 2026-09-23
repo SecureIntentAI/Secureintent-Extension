@@ -4,6 +4,7 @@ import {
   type Operation,
   PASTE_PORT,
   PASTE_READY,
+  PASTE_REQUEST_TIMEOUT_MS,
   type PasteOperations,
   type PasteProcessor,
   type PasteReply,
@@ -67,6 +68,8 @@ export async function createPasteProcessor(signal: AbortSignal): Promise<PastePr
                 };
                 port.postMessage({ id, operation, input });
               }),
+            new AbortController(),
+            PASTE_REQUEST_TIMEOUT_MS,
           ),
           signal,
         );

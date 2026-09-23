@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { seedPro } from './signing';
 
 // Deterministic e2e for the dehydrate ⇄ rehydrate round-trip. Runs against the
 // catch-all fallback guard on an UNSUPPORTED origin (no login required). REQUIRES
@@ -41,7 +42,8 @@ async function selectAndCopy(page: Page, text: string): Promise<string> {
   return page.evaluate(() => navigator.clipboard.readText());
 }
 
-test('dehydrate then rehydrate restores the secret on copy', async ({ context }) => {
+test('dehydrate then explicitly restore at paste time without rewriting the clipboard', async ({ context }) => {
+  await seedPro(context);
   const page = await context.newPage();
   await page.route(SITE, (route) => route.fulfill({ contentType: 'text/html', body: PAGE }));
   const overlay = page.locator('secureintent-overlay');
@@ -54,6 +56,7 @@ test('dehydrate then rehydrate restores the secret on copy', async ({ context })
   await expect(overlay).toBeAttached({ timeout: 5_000 });
   await overlay.getByText('Paste anonymously', { exact: true }).click();
   await expect(overlay).toHaveCount(0);
+  await expect(page.locator('#ta')).toHaveValue(TOKEN_RE);
 
   // The composer now holds a reversible token, not the raw secret.
   const masked = await page.locator('#ta').inputValue();
@@ -61,14 +64,14 @@ test('dehydrate then rehydrate restores the secret on copy', async ({ context })
   const token = masked.match(TOKEN_RE)?.[0];
   expect(token, 'composer should contain an SI token').toBeTruthy();
 
-  // 2. Rehydrate: copy "model output" containing the token. The vault write is
-  // fire-and-forget; poll the copy until the mapping has landed.
-  await expect
-    .poll(async () => selectAndCopy(page, `const key = "${token}";`), { timeout: 5_000 })
-    .toContain(SECRET);
-
   const clip = await selectAndCopy(page, `const key = "${token}";`);
-  expect(clip).not.toContain(token as string); // token fully replaced
+  expect(clip).toContain(token as string);
+  expect(clip).not.toContain(SECRET);
+  await page.locator('#ta').fill('');
+  await paste(page, clip);
+  await overlay.getByRole('button', { name: 'Rehydrate', exact: true }).click();
+  await expect(page.locator('#ta')).toHaveValue(`const key = "${SECRET}";`);
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(clip);
 
   await page.close();
 });

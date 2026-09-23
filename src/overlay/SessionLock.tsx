@@ -4,6 +4,8 @@ import { Logo } from '@/components/Logo';
 export const PIN_LENGTH = 4;
 
 export interface SessionLockProps {
+  setupRequired?: boolean;
+  onSetup?: () => void;
   /** Verify the entered PIN. Return true to unlock (caller unmounts the overlay). */
   onUnlock: (pin: string) => boolean | Promise<boolean>;
 }
@@ -36,7 +38,7 @@ function LockGlyph() {
  * Walk-away deterrent: the host page stays in the DOM behind the closed shadow
  * overlay; this gates casual viewing, not a determined attacker with devtools.
  */
-export function SessionLock({ onUnlock }: SessionLockProps) {
+export function SessionLock({ onUnlock, setupRequired, onSetup }: SessionLockProps) {
   const [digits, setDigits] = useState<string[]>(Array(PIN_LENGTH).fill(''));
   const [error, setError] = useState(false);
   const refs = useRef<(HTMLInputElement | null)[]>([]);
@@ -94,33 +96,46 @@ export function SessionLock({ onUnlock }: SessionLockProps) {
         </div>
 
         <p className="si-lock-title">Console locked</p>
-        <p className="si-lock-sub">Enter your PIN to continue.</p>
-
-        <div className={`si-pin ${error ? 'is-error' : ''}`}>
-          {digits.map((d, i) => (
-            <input
-              // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length positional inputs
-              key={i}
-              ref={(el) => {
-                refs.current[i] = el;
-              }}
-              className="si-pin-box"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={1}
-              aria-label={`PIN digit ${i + 1}`}
-              value={d}
-              onChange={(e) => setAt(i, e.target.value)}
-              onKeyDown={(e) => onKeyDown(i, e)}
-              onPaste={onPaste}
-            />
-          ))}
-        </div>
-
-        <p className="si-lock-error" role="alert">
-          {error ? 'Incorrect PIN' : ''}
+        <p className="si-lock-sub">
+          {setupRequired
+            ? 'Your team requires Session Lock. Set a PIN in the extension to continue.'
+            : 'Enter your PIN to continue.'}
         </p>
+        {setupRequired ? (
+          <button type="button" className="si-btn si-btn-mint" onClick={onSetup}>
+            Set up Session Lock
+          </button>
+        ) : (
+          <>
+            <div className={`si-pin ${error ? 'is-error' : ''}`}>
+              {digits.map((d, i) => (
+                <input
+                  // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length positional inputs
+                  key={i}
+                  ref={(el) => {
+                    refs.current[i] = el;
+                  }}
+                  className="si-pin-box"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={1}
+                  aria-label={`PIN digit ${i + 1}`}
+                  value={d}
+                  onChange={(e) => setAt(i, e.target.value)}
+                  onKeyDown={(e) => onKeyDown(i, e)}
+                  onPaste={onPaste}
+                />
+              ))}
+            </div>
+
+            <p className="si-lock-error" role="alert">
+              {error
+                ? 'Incorrect PIN or too many attempts. After five attempts, wait 30 seconds.'
+                : ''}
+            </p>
+          </>
+        )}
 
         <div className="si-lock-foot">
           <Logo size={14} />

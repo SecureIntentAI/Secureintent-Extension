@@ -87,7 +87,7 @@ export function SessionLockSettings() {
       setEnabled(e || enf); // an enforced lock reads as on, whatever storage says
       setHasPin(Boolean(h));
       setTimeoutMin(Math.round(ms / MIN));
-      setEntitled(ent);
+      setEntitled(ent || enf);
       setEnforced(enf);
       setLoaded(true);
       // Turn the open/close animation on a couple of frames later, so the

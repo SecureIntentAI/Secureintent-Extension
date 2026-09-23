@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-shadow
+dist-e2e
 coverage
 
 # Local build-time env (Clerk publishable key, etc.)

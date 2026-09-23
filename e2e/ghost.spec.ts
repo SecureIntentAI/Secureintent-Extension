@@ -1,5 +1,8 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { seedPro } from './signing';
+
+test.beforeEach(async ({ context }) => { await seedPro(context); });
 
 // Deterministic e2e for the Ghost Sanitizer. Runs against the catch-all fallback
 // guard on an UNSUPPORTED origin (no login). REQUIRES the e2e build
@@ -44,6 +47,7 @@ test('large log paste shows the Ghost summary and Sanitize & paste strips everyt
 
   await overlay.getByText('Sanitize & paste', { exact: true }).click();
   await expect(overlay).toHaveCount(0);
+  await expect(page.locator('#ta')).toHaveValue(/\[#SECRET_1#\]/);
 
   const out = await page.locator('#ta').inputValue();
   // Every sensitive value is gone…

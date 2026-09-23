@@ -13,7 +13,7 @@ declare const chrome: {
 };
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
-const EXT = path.resolve(dirname, process.env.SI_E2E_EXTENSION ?? '../dist/chrome-mv3');
+const EXT = path.resolve(dirname, process.env.SI_E2E_EXTENSION ?? '../dist-e2e/chrome-mv3');
 
 type WorkerFixtures = {
   // The persistent browser context, launched ONCE per worker. Playwright's

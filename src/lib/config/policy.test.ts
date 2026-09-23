@@ -9,6 +9,7 @@ const POLICY: BundlePolicy = {
   requireSessionLock: true,
   extraPatterns: [{ type: 'known-key', label: 'Acme key', regex: 'acme_[a-z0-9]{10}' }],
   blockedSites: ['pastebin.com'],
+  aiServices: [],
 };
 
 describe('getPolicy', () => {
@@ -19,6 +20,7 @@ describe('getPolicy', () => {
       requireSessionLock: false,
       extraPatterns: [],
       blockedSites: [],
+      aiServices: [],
     });
   });
 
@@ -53,6 +55,7 @@ describe('getPolicy', () => {
       requireSessionLock: false,
       extraPatterns: [],
       blockedSites: [],
+      aiServices: [],
     });
   });
 

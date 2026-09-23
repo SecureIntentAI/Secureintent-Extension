@@ -468,6 +468,7 @@ a.w-mark:focus-visible {
 }
 
 .w-consent {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 11px;
@@ -485,9 +486,13 @@ a.w-mark:focus-visible {
 }
 .w-consent input {
   position: absolute;
+  left: 15px;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0;
   opacity: 0;
-  width: 0;
-  height: 0;
+  cursor: pointer;
 }
 .w-consent-box {
   flex: 0 0 auto;

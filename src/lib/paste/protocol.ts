@@ -11,6 +11,10 @@ export const MAX_PREVIEW_FINDINGS = 100;
 export const WORK_TIMEOUT_MS = 5_000;
 export const IDLE_TIMEOUT_MS = 120_000;
 export const MAX_PASTE_WORKERS = 4;
+export const MAX_PASTE_SESSIONS = 1000;
+export const MAX_RETAINED_BYTES = 64 * 1024 * 1024;
+export const QUEUE_TIMEOUT_MS = 30_000;
+export const PASTE_REQUEST_TIMEOUT_MS = QUEUE_TIMEOUT_MS + WORK_TIMEOUT_MS + 5_000;
 
 export type WirePattern = Omit<Pattern, 'regex'> & { source: string; flags: string };
 export interface ScanResult {

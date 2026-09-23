@@ -1,4 +1,4 @@
-import { storage } from '#imports';
+import { browser, storage } from '#imports';
 
 /**
  * Terms & Privacy consent. Blocking: until the user accepts the current version,
@@ -33,4 +33,33 @@ export async function isConsentAccepted(): Promise<boolean> {
 /** Record acceptance of the current terms version. */
 export async function acceptTerms(nowMs = Date.now()): Promise<void> {
   await consentItem.setValue({ version: TERMS_VERSION, acceptedAt: nowMs });
+}
+
+/**
+ * Open Terms or Privacy in a normal browser tab.
+ *
+ * An extension page must not follow these links itself. A `target="_blank"`
+ * anchor inside the consent label makes Chrome replace the welcome tab with
+ * about:blank.
+ */
+export function openPolicyPage(
+  url: string,
+): (event: { preventDefault(): void; stopPropagation(): void }) => void {
+  return (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (url !== TOS_URL && url !== PRIVACY_URL) return;
+    try {
+      const opened = browser.tabs?.create({ url });
+      if (opened && typeof opened.catch === 'function') {
+        void opened.catch(() => {
+          browser.runtime.sendMessage({ type: 'si-open-page', url }).catch(() => {});
+        });
+        return;
+      }
+    } catch {
+      // Content scripts have no tabs API. The background opens the page.
+    }
+    browser.runtime.sendMessage({ type: 'si-open-page', url }).catch(() => {});
+  };
 }

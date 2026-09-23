@@ -17,12 +17,12 @@ export const HANDLED_TTL_MS = 5000;
 
 /** First frame on every connection. Anything else and the desktop closes on us. */
 export interface HelloMessage {
-  type: 'hello';
-  token: string;
+  type: 'hello_v2';
+  nonce: string;
 }
 
 export interface WelcomeMessage {
-  type: 'welcome';
+  type: 'welcome_v2';
   ok: boolean;
 }
 

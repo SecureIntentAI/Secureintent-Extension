@@ -23,6 +23,9 @@ export default defineContentScript({
   matches: ['*://*/*'],
   runAt: 'document_idle',
   main() {
+    const page = window as unknown as Record<string, boolean>;
+    if (page.__secureintentBridge) return;
+    page.__secureintentBridge = true;
     let enabled = false;
     // Only report a real move. An in-page route change in a single-page app
     // never alters host or port, so debouncing alone would still send a burst of

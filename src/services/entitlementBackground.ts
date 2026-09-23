@@ -8,8 +8,9 @@ import {
   IS_FIREFOX,
   isAuthEnabled,
 } from '@/lib/clerkConfig';
+import { configItem } from '@/lib/config/store';
 import { siDebug } from '@/lib/debug';
-import { entitlementItem } from '@/lib/entitlement';
+import { entitlementItem, getActiveEntitlement } from '@/lib/entitlement';
 import { type RefreshResult, refreshEntitlement } from '@/lib/entitlement/refresh';
 import { offlineUsed } from '@/lib/quota/offline';
 import { getClerkTokenFromCookie, getClerkUserIdFromCookie } from './cookieToken';
@@ -50,6 +51,22 @@ export function refreshEntitlementBg(): Promise<RefreshResult> {
     // Even when the API is offline, reject a cached plan belonging to a
     // different known session. Keep this check inside the shared pipeline.
     await enforceEntitlementBinding(signal);
+    // A policy belongs to a seat, not an installation. Never leave the old
+    // team's rules/custom patterns attached after a confirmed identity change.
+    if (
+      result.status === 'signed-out' ||
+      result.status === 'updated' ||
+      result.status === 'cleared'
+    ) {
+      const [bundle, ent] = await Promise.all([configItem.getValue(), getActiveEntitlement()]);
+      signal.throwIfAborted();
+      if (
+        bundle?.policy &&
+        (!ent.org || (bundle.policy.orgId && bundle.policy.orgId !== ent.org.id))
+      ) {
+        await configItem.setValue(null);
+      }
+    }
     return result;
   }, controller)
     .catch(

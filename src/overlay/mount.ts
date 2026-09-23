@@ -7,7 +7,7 @@ export interface OverlayHandle {
   remove(): void;
 }
 
-// closed Shadow DOM so the host page cannot read or tamper with the overlay
+// Closed Shadow DOM isolates internals/styles; its host is still part of the page.
 export async function mountOverlay(
   ctx: ContentScriptContext,
   props: Omit<OverlayProps, 'onAction'> & { onAction: (action: OverlayAction) => void },

@@ -80,13 +80,16 @@ export function BridgeSettings() {
 
       {enabled && (
         <div className="si-lockcfg-body-inner">
+          <p className="si-lockcfg-hint">
+            Requires a desktop app supporting secure pairing v2. Older versions cannot pair.
+          </p>
           <label className="si-lockcfg-hint" htmlFor="si-bridge-token">
             Pairing token — copy it from the desktop app’s dashboard
           </label>
           <div className="si-lockcfg-row">
             <input
               id="si-bridge-token"
-              type="text"
+              type="password"
               spellCheck={false}
               autoComplete="off"
               placeholder="Paste the token"

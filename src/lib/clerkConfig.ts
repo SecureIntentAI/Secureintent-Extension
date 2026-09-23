@@ -1,6 +1,7 @@
 // Clerk publishable key — safe to ship in the client (it is not a secret).
 // Provided at build time via WXT env: set WXT_CLERK_PUBLISHABLE_KEY in ext/.env.
-export const CLERK_PUBLISHABLE_KEY = import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '';
+export const CLERK_PUBLISHABLE_KEY =
+  import.meta.env.WXT_E2E === '1' ? '' : (import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '');
 
 /** The custom Clerk JWT template that carries email + public_metadata claims. */
 export const CLERK_JWT_TEMPLATE = 'secureintent';

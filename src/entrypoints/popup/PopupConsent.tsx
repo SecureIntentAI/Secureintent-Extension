@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { browser } from '#imports';
 import { Logo } from '@/components/Logo';
-import { acceptTerms, PRIVACY_URL, TOS_URL } from '@/lib/consent';
+import { acceptTerms, openPolicyPage, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 
 function HeroShield() {
   return (
@@ -70,11 +70,11 @@ export function PopupConsent({ onAccept }: { onAccept: () => void }) {
           </span>
           <span className="si-consent-check-text">
             I agree to the{' '}
-            <a href={TOS_URL} target="_blank" rel="noreferrer">
+            <a href={TOS_URL} onClick={openPolicyPage(TOS_URL)}>
               Terms
             </a>{' '}
             and{' '}
-            <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
+            <a href={PRIVACY_URL} onClick={openPolicyPage(PRIVACY_URL)}>
               Privacy Policy
             </a>
           </span>

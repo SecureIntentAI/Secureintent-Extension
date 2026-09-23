@@ -1,7 +1,13 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { Logo } from '@/components/Logo';
-import { acceptTerms, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
+import {
+  acceptTerms,
+  isConsentAccepted,
+  openPolicyPage,
+  PRIVACY_URL,
+  TOS_URL,
+} from '@/lib/consent';
 import './style.css';
 
 function HeroShield() {
@@ -339,11 +345,11 @@ function Welcome() {
             </span>
             <span className="w-consent-text">
               I agree to the{' '}
-              <a href={TOS_URL} target="_blank" rel="noreferrer">
+              <a href={TOS_URL} onClick={openPolicyPage(TOS_URL)}>
                 Terms
               </a>{' '}
               and{' '}
-              <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
+              <a href={PRIVACY_URL} onClick={openPolicyPage(PRIVACY_URL)}>
                 Privacy Policy
               </a>
             </span>

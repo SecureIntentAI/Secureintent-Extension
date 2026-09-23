@@ -5,7 +5,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react', '@wxt-dev/auto-icons'],
   srcDir: 'src',
   publicDir: 'src/public',
-  outDir: 'dist',
+  outDir: process.env.WXT_E2E === '1' ? 'dist-e2e' : 'dist',
   // Rasterizes src/assets/icon.svg into all manifest icon sizes at build time.
   autoIcons: {
     baseIconPath: 'assets/icon.svg',
@@ -51,7 +51,7 @@ export default defineConfig({
         'alarms',
         'activeTab',
         'cookies',
-        ...(isFirefox ? [] : ['offscreen']),
+        ...(isFirefox ? [] : ['offscreen', 'scripting']),
       ],
       // Privileged access to our Worker so the background config sync + content-script
       // telemetry fetches bypass page CORS, plus the Clerk Frontend API for auth.
@@ -61,6 +61,9 @@ export default defineConfig({
         'https://secureintent.ai/*',
         'https://*.clerk.accounts.dev/*',
         'https://clerk.secureintent.ai/*',
+        // Needed so an already-open tab can receive the paste guard on install.
+        // The content scripts already run on these pages after a reload.
+        ...(isFirefox ? [] : ['http://*/*', 'https://*/*']),
         ...localHosts,
       ],
       // Firefox-only: AMO requires a stable add-on id, a minimum-version floor

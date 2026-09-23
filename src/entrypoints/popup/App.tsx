@@ -103,8 +103,16 @@ function App() {
 
     // Resolve protection status for the current tab.
     Promise.all([browser.tabs.query({ active: true, currentWindow: true }), isEnabled()]).then(
-      ([tabs, enabled]) => {
-        setStatus(protectionStatus(tabs[0]?.url, enabled));
+      async ([tabs, enabled]) => {
+        const candidate = protectionStatus(tabs[0]?.url, enabled);
+        if (candidate.kind !== 'active' || tabs[0]?.id == null) {
+          setStatus(candidate);
+          return;
+        }
+        const response = await browser.tabs
+          .sendMessage(tabs[0].id, { type: 'si-protection-status' })
+          .catch(() => null);
+        setStatus(response?.ready && response.active ? candidate : { kind: 'inactive' });
       },
     );
 
@@ -197,7 +205,7 @@ function App() {
           title="Your text is analyzed on-device and never leaves the browser"
         >
           <LocalShieldIcon />
-          Zero retention
+          Local text processing
         </span>
         <a
           className="si-link"

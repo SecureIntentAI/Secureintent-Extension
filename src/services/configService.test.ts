@@ -48,6 +48,7 @@ const TEAM_POLICY: BundlePolicy = {
   requireSessionLock: true,
   extraPatterns: [],
   blockedSites: ['pastebin.com'],
+  aiServices: [],
 };
 
 describe('syncConfig', () => {
@@ -129,6 +130,7 @@ describe('syncConfig — org resolution', () => {
 
 describe('syncConfig — team policy', () => {
   test('stores the policy from a bundle whose signature verifies', async () => {
+    getClerkTokenMock.mockResolvedValue('signed-in-test-session');
     const b = { ...DEFAULT_BUNDLE, version: 60, policy: TEAM_POLICY, policyVersion: 3 };
     mockConfig(b, await sign(b));
 
@@ -150,13 +152,57 @@ describe('syncConfig — team policy', () => {
   });
 
   test('a policy signed for an OLDER bundle version is not applied', async () => {
-    // Same freshness rule as the patterns: only a strictly newer bundle wins.
     await saveBundle({ ...DEFAULT_BUNDLE, version: 70 });
     const b = { ...DEFAULT_BUNDLE, version: 69, policy: TEAM_POLICY };
     mockConfig(b, await sign(b));
 
     expect((await syncConfig()).status).toBe('unchanged');
     expect(getPolicy(await getActiveBundle()).requireSessionLock).toBe(false);
+  });
+
+  test('a signed-in member stores a policy published at the current catalogue version', async () => {
+    getClerkTokenMock.mockResolvedValue('jwt-abc');
+    await saveBundle({ ...DEFAULT_BUNDLE, version: 12 });
+    const b = {
+      ...DEFAULT_BUNDLE,
+      version: 12,
+      policy: { ...TEAM_POLICY, orgId: 'org_acme' },
+      policyVersion: 2,
+    };
+    mockConfig(b, await sign(b));
+
+    expect((await syncConfig()).status).toBe('updated');
+    expect(getPolicy(await getActiveBundle()).blockedSites).toEqual(['pastebin.com']);
+    expect((await getActiveBundle()).policyVersion).toBe(2);
+  });
+
+  test('a signed-out refresh does not install or drop team rules at the same version', async () => {
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      version: 12,
+      policy: { ...TEAM_POLICY, orgId: 'org_acme' },
+      policyVersion: 2,
+    });
+    const plain = { ...DEFAULT_BUNDLE, version: 12 };
+    mockConfig(plain, await sign(plain));
+
+    expect((await syncConfig()).status).toBe('unchanged');
+    expect(getPolicy(await getActiveBundle()).requireSessionLock).toBe(true);
+  });
+
+  test('leaving the team drops the policy when the signed-in bundle no longer carries one', async () => {
+    getClerkTokenMock.mockResolvedValue('jwt-abc');
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      version: 12,
+      policy: { ...TEAM_POLICY, orgId: 'org_acme' },
+      policyVersion: 4,
+    });
+    const plain = { ...DEFAULT_BUNDLE, version: 12 };
+    mockConfig(plain, await sign(plain));
+
+    expect((await syncConfig()).status).toBe('updated');
+    expect((await getActiveBundle()).policy).toBeUndefined();
   });
 
   test('regression: a bundle with no policy stores and reads back with none', async () => {
@@ -171,6 +217,7 @@ describe('syncConfig — team policy', () => {
       requireSessionLock: false,
       extraPatterns: [],
       blockedSites: [],
+      aiServices: [],
     });
   });
 });

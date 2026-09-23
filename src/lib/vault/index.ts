@@ -86,9 +86,7 @@ export async function vaultResolve(
 
 /**
  * All live `token → secret` pairs for an origin (expired entries omitted).
- * Used to hydrate an in-memory cache so the copy handler can rehydrate
- * synchronously — clipboard rewrites must happen inside the copy event, before
- * any await.
+ * Read by the background on each restoration request; no long-lived page cache.
  */
 export async function vaultSnapshot(
   store: VaultStore,

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { BrowserContext } from '@playwright/test';
 import { expect, test } from './fixtures';
+import { seedPro } from './signing';
 
 // Deterministic e2e for Session Lock (the cloud-console PIN gate). Seeds a known PIN hash +
 // a sub-second timeout, serves a fake AWS console, and drives the lock/unlock.
@@ -18,6 +19,7 @@ const GLOB = 'https://console.aws.amazon.com/**';
 const PAGE = `<!doctype html><meta charset="utf-8"><body><h1>AWS Console</h1></body>`;
 
 async function seed(context: BrowserContext): Promise<void> {
+  await seedPro(context);
   const sw = context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker'));
   await sw.evaluate(
     ([salt, hash]) =>

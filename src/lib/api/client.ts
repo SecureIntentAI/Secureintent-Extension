@@ -5,9 +5,11 @@ export const API_BASE = import.meta.env.WXT_API_BASE ?? 'https://api.secureinten
 
 export async function getJson<T>(path: string, headers?: Record<string, string>): Promise<T> {
   // no-store: config must never come from the HTTP cache (always latest bundle)
-  const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
-  return (await res.json()) as T;
+  return withDeadline(async (signal) => {
+    const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store', headers, signal });
+    if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+    return (await res.json()) as T;
+  });
 }
 
 // Fire-and-forget POST: never throws, survives navigation.
@@ -19,3 +21,5 @@ export function postJson(path: string, body: unknown): void {
     keepalive: true,
   }).catch(() => {});
 }
+
+import { withDeadline } from '@/lib/async';

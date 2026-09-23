@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { PATTERNS } from '../detection/patterns';
 import { installPasteWorkerHost } from './host';
-import { IDLE_TIMEOUT_MS, MAX_PASTE_WORKERS, PASTE_PORT, WORK_TIMEOUT_MS } from './protocol';
+import { createPasteComputation } from './process';
+import {
+  IDLE_TIMEOUT_MS,
+  MAX_PASTE_SESSIONS,
+  MAX_PASTE_WORKERS,
+  PASTE_PORT,
+  type PasteCommand,
+  WORK_TIMEOUT_MS,
+} from './protocol';
+
+const scan = { id: 1, operation: 'scan', input: { text: 'safe', patterns: [], summary: false } };
 
 function events() {
   const listeners = new Set<(...args: unknown[]) => void>();
@@ -57,7 +68,7 @@ test('terminates a stuck worker using a timer outside the worker', async () => {
   const { worker, connect } = setup();
   const port = connection();
   connect(port);
-  port.onMessage.fire({ id: 1, operation: 'scan', input: {} });
+  port.onMessage.fire(scan);
   await vi.advanceTimersByTimeAsync(WORK_TIMEOUT_MS);
   expect(worker.terminate).toHaveBeenCalledTimes(1);
   expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, ok: false }));
@@ -68,7 +79,7 @@ test('disconnect cancels a running regex immediately and drops late replies', ()
   const { worker, connect } = setup();
   const port = connection();
   connect(port);
-  port.onMessage.fire({ id: 1, operation: 'scan', input: {} });
+  port.onMessage.fire(scan);
   port.onDisconnect.fire();
   worker.onmessage?.call(
     worker as unknown as Worker,
@@ -80,15 +91,17 @@ test('disconnect cancels a running regex immediately and drops late replies', ()
 
 test('idle paste data is discarded and capacity is bounded and released', async () => {
   const { worker, makeWorker, connect } = setup();
-  for (let i = 0; i < MAX_PASTE_WORKERS; i++) connect(connection());
+  for (let i = 0; i < MAX_PASTE_SESSIONS; i++) connect(connection());
   const overflow = connection();
   connect(overflow);
   expect(overflow.disconnect).toHaveBeenCalled();
-  expect(makeWorker).toHaveBeenCalledTimes(MAX_PASTE_WORKERS);
+  expect(makeWorker).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(IDLE_TIMEOUT_MS);
-  expect(worker.terminate).toHaveBeenCalledTimes(MAX_PASTE_WORKERS);
-  connect(connection());
-  expect(makeWorker).toHaveBeenCalledTimes(MAX_PASTE_WORKERS + 1);
+  expect(worker.terminate).not.toHaveBeenCalled();
+  const next = connection();
+  connect(next);
+  next.onMessage.fire(scan);
+  expect(makeWorker).toHaveBeenCalledTimes(1);
 });
 
 test('rejects non-content-script senders before creating a worker', () => {
@@ -100,11 +113,40 @@ test('rejects non-content-script senders before creating a worker', () => {
   expect(port.disconnect).toHaveBeenCalled();
 });
 
+test('memory overload refuses additional text without bypassing the scan', () => {
+  const { connect } = setup();
+  const ports = Array.from({ length: 10 }, () => {
+    const port = connection();
+    connect(port);
+    port.onMessage.fire({ ...scan, input: { ...scan.input, text: 'x'.repeat(2_000_000) } });
+    return port;
+  });
+  expect(ports[9].postMessage).toHaveBeenCalledWith(
+    expect.objectContaining({ ok: false, error: expect.stringContaining('capacity') }),
+  );
+  for (const port of ports) port.onDisconnect.fire();
+});
+
+test('disconnecting a queued session removes it without creating another worker', () => {
+  const { connect, makeWorker } = setup();
+  const ports = Array.from({ length: 5 }, () => {
+    const port = connection();
+    connect(port);
+    port.onMessage.fire(scan);
+    return port;
+  });
+  expect(makeWorker).toHaveBeenCalledTimes(4);
+  ports[4].onDisconnect.fire();
+  ports[0].onDisconnect.fire();
+  expect(makeWorker).toHaveBeenCalledTimes(4);
+  for (const port of ports) port.onDisconnect.fire();
+});
+
 test('successful replies reset the deadline without losing the session', async () => {
   const { worker, connect } = setup();
   const port = connection();
   connect(port);
-  port.onMessage.fire({ id: 1, operation: 'scan', input: {} });
+  port.onMessage.fire(scan);
   worker.onmessage?.call(
     worker as unknown as Worker,
     new MessageEvent('message', { data: { id: 1, ok: true, result: [] } }),
@@ -115,3 +157,67 @@ test('successful replies reset the deadline without losing the session', async (
   expect(worker.postMessage).toHaveBeenCalledTimes(2);
   port.onDisconnect.fire();
 });
+
+test('1,000 concurrent sessions complete real scans with at most four workers and isolated results', async () => {
+  vi.useRealTimers();
+  const listen = vi
+    .spyOn(fakeBrowser.runtime.onConnect, 'addListener')
+    .mockImplementation(() => {});
+  let busy = 0;
+  let peak = 0;
+  const factory = vi.fn(() => {
+    const worker = {
+      onmessage: null as Worker['onmessage'],
+      onerror: null,
+      onmessageerror: null,
+      terminate: vi.fn(),
+      postMessage(command: PasteCommand) {
+        busy++;
+        peak = Math.max(peak, busy);
+        queueMicrotask(() => {
+          const result = createPasteComputation()(command);
+          busy--;
+          worker.onmessage?.call(
+            worker as unknown as Worker,
+            new MessageEvent('message', { data: { id: command.id, ok: true, result } }),
+          );
+        });
+      },
+    };
+    return worker as unknown as Worker;
+  });
+  installPasteWorkerHost(factory);
+  const connect = listen.mock.calls.at(-1)![0];
+  const patterns = PATTERNS.map(({ regex, ...p }) => ({
+    ...p,
+    source: regex.source,
+    flags: regex.flags,
+  }));
+  const ports = Array.from({ length: 1000 }, (_, i) => {
+    const port = connection();
+    port.sender.tab.id = i + 1;
+    connect(port as never);
+    port.onMessage.fire({
+      id: 1,
+      operation: 'scan',
+      input: {
+        text: `page ${i}: sk-${String(i).padStart(30, 'a')}`,
+        patterns,
+        summary: false,
+      },
+    });
+    return port;
+  });
+  await vi.waitFor(
+    () => expect(ports.every((port) => port.postMessage.mock.calls.length === 1)).toBe(true),
+    { timeout: 10_000 },
+  );
+  for (let i = 0; i < ports.length; i++) {
+    const response = ports[i].postMessage.mock.calls[0][0];
+    expect(response.ok).toBe(true);
+    expect(response.result.detections[0].match).toBe(`sk-${String(i).padStart(30, 'a')}`);
+    ports[i].onDisconnect.fire();
+  }
+  expect(peak).toBeLessThanOrEqual(MAX_PASTE_WORKERS);
+  expect(factory).toHaveBeenCalledTimes(MAX_PASTE_WORKERS);
+}, 15_000);

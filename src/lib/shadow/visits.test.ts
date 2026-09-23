@@ -1,26 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   canDiscover,
+  type DiscoverySeat,
   emptyVisitState,
   enqueueVisit,
   makeDlpEvent,
   makePasteVolume,
   makeVisit,
   QUEUE_LIMIT,
-  type TestSession,
   VISIT_TTL,
 } from './visits';
 
 const now = 1_790_000_000_000;
-const session: TestSession = {
-  token: 'test',
-  seatId: 'seat-test',
-  seatLabel: 'Seat 1',
-  orgId: 'test-org-alpha',
-  plan: 'business_pro',
-  expiresAt: now + VISIT_TTL,
-  localOnly: true,
-};
+const seat: DiscoverySeat = { plan: 'business_pro', orgId: 'org_acme' };
 const id = '88267dc6-3915-4a2d-957f-848f211fce45';
 const sender = { url: 'https://chatgpt.com/c/PRIVATE-CHAT?prompt=PRIVATE-TEXT#SECRET', frameId: 0 };
 describe('hostname-only visits', () => {
@@ -57,52 +49,49 @@ describe('hostname-only visits', () => {
     ).toBe('github.com');
     expect(makeVisit(sender, 'a-chat-id', now)).toBeNull();
   });
-  it('requires opted-in, unexpired Business team context', () => {
-    expect(canDiscover(session, now)).toBe(true);
+  it('requires a real Business organisation seat', () => {
+    expect(canDiscover(seat)).toBe(true);
     for (const value of [
       null,
-      { ...session, plan: 'developer' },
-      { ...session, plan: 'developer_pro' },
-      { ...session, orgId: null },
-      { ...session, expiresAt: now },
+      { plan: 'developer', orgId: 'org_acme' },
+      { plan: 'developer_pro', orgId: 'org_acme' },
+      { plan: 'business_pro', orgId: null },
+      { plan: 'business_pro', orgId: 'test-org-alpha' },
     ]) {
-      expect(canDiscover(value, now)).toBe(false);
+      expect(canDiscover(value)).toBe(false);
       expect(
-        enqueueVisit({ ...emptyVisitState(), session: value }, makeVisit(sender, id, now)!, now)
-          .queue,
+        enqueueVisit(emptyVisitState(), makeVisit(sender, id, now)!, now, value).queue,
       ).toEqual([]);
     }
   });
   it('deduplicates observer retries even after a successful upload', () => {
     const event = makeVisit(sender, id, now)!;
-    const state = enqueueVisit({ ...emptyVisitState(), session }, event, now);
-    expect(enqueueVisit(state, event, now).queue).toHaveLength(1);
-    expect(enqueueVisit({ ...state, queue: [] }, event, now).queue).toHaveLength(0);
+    const state = enqueueVisit(emptyVisitState(), event, now, seat);
+    expect(enqueueVisit(state, event, now, seat).queue).toHaveLength(1);
+    expect(enqueueVisit({ ...state, queue: [] }, event, now, seat).queue).toHaveLength(0);
   });
   it('bounds offline storage and tracks dropped metadata', () => {
-    let state = { ...emptyVisitState(), session };
+    let state = emptyVisitState();
     for (let i = 0; i < QUEUE_LIMIT + 4; i++) {
       state = enqueueVisit(
         state,
         makeVisit(sender, `88267dc6-3915-4a2d-957f-${i.toString(16).padStart(12, '0')}`, now)!,
         now,
-      ) as typeof state;
+        seat,
+      );
     }
     expect(state.queue).toHaveLength(QUEUE_LIMIT);
     expect(state.dropped).toBe(4);
   });
-  it('expires old metadata and clears queue on session expiry', () => {
+  it('expires old metadata and drops the queue when the seat is no longer Business', () => {
     const oldEvent = makeVisit(sender, id, now - VISIT_TTL - 1)!;
     const nextEvent = makeVisit(sender, crypto.randomUUID(), now)!;
-    const state = enqueueVisit(
-      { ...emptyVisitState(), session, queue: [oldEvent] },
-      nextEvent,
-      now,
-    );
+    const state = enqueueVisit({ ...emptyVisitState(), queue: [oldEvent] }, nextEvent, now, seat);
     expect(state.queue).toEqual([nextEvent]);
     expect(state.dropped).toBe(1);
-    expect(enqueueVisit(state, nextEvent, session.expiresAt).session).toBeNull();
-    expect(enqueueVisit(state, nextEvent, session.expiresAt).queue).toEqual([]);
+    const cleared = enqueueVisit(state, nextEvent, now, { plan: 'developer', orgId: null });
+    expect(cleared.queue).toEqual([]);
+    expect(cleared.dropped).toBe(state.dropped + 1);
   });
 });
 

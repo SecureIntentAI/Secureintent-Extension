@@ -5,6 +5,11 @@ import { OFFLINE_LIMIT, offlineConsume, offlineUsed } from './offline';
 beforeEach(() => fakeBrowser.reset());
 
 describe('offline anonymise quota', () => {
+  test('concurrent requests never spend more than the allowance', async () => {
+    const results = await Promise.all(Array.from({ length: 1000 }, () => offlineConsume()));
+    expect(results.filter((r) => r.allowed)).toHaveLength(OFFLINE_LIMIT);
+    expect(await offlineUsed()).toBe(OFFLINE_LIMIT);
+  });
   test('starts at zero used', async () => {
     expect(await offlineUsed()).toBe(0);
   });

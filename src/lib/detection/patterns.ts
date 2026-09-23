@@ -39,7 +39,7 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'AWS access key ID',
-    regex: /AKIA[0-9A-Z]{16}/g,
+    regex: /(?:AKIA|ASIA|AIDA)[0-9A-Z]{16}/g,
   },
   {
     type: 'known-key',
@@ -59,7 +59,7 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'Slack token',
-    regex: /xox[baprs]-[0-9A-Za-z-]{10,}/g,
+    regex: /xox[baprsce]-[0-9A-Za-z-]{10,}/g,
   },
   {
     type: 'known-key',
@@ -85,6 +85,32 @@ export const PATTERNS: Pattern[] = [
     type: 'known-key',
     label: 'Hugging Face token',
     regex: /hf_[A-Za-z0-9]{30,}/g,
+  },
+  {
+    type: 'known-key',
+    label: 'Perplexity API key',
+    regex: /pplx-[A-Za-z0-9]{20,}/g,
+  },
+  {
+    type: 'known-key',
+    label: 'OpenRouter API key',
+    regex: /sk-or-v1-[A-Za-z0-9]{20,}/g,
+  },
+  {
+    type: 'known-key',
+    label: 'Groq API key',
+    regex: /gsk_[A-Za-z0-9]{20,}/g,
+  },
+  {
+    type: 'env-credential',
+    label: 'JSON credential',
+    regex:
+      /["'](?:api[_-]?key|access[_-]?key|client[_-]?secret|secret|token|password|passwd)["']\s*:\s*["'][^"']{8,}["']/gi,
+  },
+  {
+    type: 'known-key',
+    label: 'xAI API key',
+    regex: /xai-[A-Za-z0-9]{20,}/g,
   },
   {
     type: 'known-key',
@@ -148,7 +174,7 @@ export const PATTERNS: Pattern[] = [
     // served bundle overrides this, and this is what a fresh install uses until
     // its first sync.
     regex:
-      /\b[A-Za-z0-9_]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)(?:[_-]?key)?\s*=\s*\S{6,}/gi,
+      /\b[A-Za-z0-9_]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)(?:[_-]?key)?\s*[=:]\s*["']?[^\s"']{6,}/gi,
   },
   {
     // only flagged with its label — a bare 40-char base64 string is indistinguishable from a hash

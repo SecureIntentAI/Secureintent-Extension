@@ -30,7 +30,18 @@ export function evaluateBlob(
   signatureValid: boolean,
   expectedUserId?: string | null,
 ): ActiveEntitlement {
-  if (!signatureValid || blob.exp <= nowSec) return FREE_ENTITLEMENT;
+  if (
+    !signatureValid ||
+    !blob ||
+    !Number.isFinite(blob.exp) ||
+    blob.exp <= nowSec ||
+    typeof blob.clerkUserId !== 'string' ||
+    typeof blob.pro !== 'boolean' ||
+    !['developer', 'developer_pro', 'business_pro'].includes(blob.plan) ||
+    !Array.isArray(blob.features) ||
+    !blob.features.every((key) => typeof key === 'string')
+  )
+    return FREE_ENTITLEMENT;
   if (expectedUserId !== undefined && blob.clerkUserId !== expectedUserId) return FREE_ENTITLEMENT;
   return {
     plan: blob.plan,
@@ -52,9 +63,14 @@ export async function evaluateStored(
   if (!stored) return FREE_ENTITLEMENT;
   // Verify against the exact signed payload when present; fall back to a
   // re-stringify only for values cached before `payload` was stored.
-  const payload = stored.payload ?? JSON.stringify(stored.blob);
-  const valid = await verifyBundle(payload, stored.signature);
-  return evaluateBlob(stored.blob, nowSec, valid, expectedUserId);
+  try {
+    const payload = stored.payload ?? JSON.stringify(stored.blob);
+    const valid = await verifyBundle(payload, stored.signature);
+    // Only interpret bytes authenticated by the signature, never the duplicate blob.
+    return evaluateBlob(JSON.parse(payload), nowSec, valid, expectedUserId);
+  } catch {
+    return FREE_ENTITLEMENT;
+  }
 }
 
 /**
@@ -114,11 +130,22 @@ async function computeActorId(userId: string, orgId: string): Promise<string> {
 
 let cachedFeatures = new Set<string>();
 let cachedSnapshot: EntitlementSnapshot = FREE_SNAPSHOT;
+let cachedExpiry = 0;
+let cacheRevision = 0;
 
-async function computeCache(): Promise<{ features: Set<string>; snapshot: EntitlementSnapshot }> {
+async function computeCache(): Promise<{
+  features: Set<string>;
+  snapshot: EntitlementSnapshot;
+  expiry: number;
+}> {
   const stored = await entitlementItem.getValue();
   const ent = await evaluateStored(stored, Math.floor(Date.now() / 1000));
+  let signed: SignedEntitlement | null = null;
+  try {
+    signed = JSON.parse(stored?.payload ?? JSON.stringify(stored?.blob ?? null));
+  } catch {}
   return {
+    expiry: signed?.exp ?? 0,
     features: new Set(ent.features),
     // signedIn: any stored blob means the user authenticated (even on the free tier).
     snapshot: {
@@ -130,8 +157,8 @@ async function computeCache(): Promise<{ features: Set<string>; snapshot: Entitl
       orgId: ent.org?.id ?? null,
       orgName: ent.org?.name ?? null,
       actorId:
-        ent.org && stored?.blob.clerkUserId
-          ? await computeActorId(stored.blob.clerkUserId, ent.org.id)
+        ent.org && signed?.clerkUserId
+          ? await computeActorId(signed.clerkUserId, ent.org.id)
           : null,
     },
   };
@@ -142,24 +169,29 @@ async function computeCache(): Promise<{ features: Set<string>; snapshot: Entitl
  * Call once at content-script boot. Returns a stop() to remove the watcher.
  */
 export async function initEntitlementCache(): Promise<() => void> {
-  const c = await computeCache();
-  cachedFeatures = c.features;
-  cachedSnapshot = c.snapshot;
-  return entitlementItem.watch(async () => {
+  const update = async () => {
+    const revision = ++cacheRevision;
     const next = await computeCache();
+    if (revision !== cacheRevision) return;
     cachedFeatures = next.features;
     cachedSnapshot = next.snapshot;
+    cachedExpiry = next.expiry;
+  };
+  const stop = entitlementItem.watch(() => {
+    void update();
   });
+  await update();
+  return stop;
 }
 
 /** Synchronous gate for the paste/lock hot paths. Reads the primed cache. */
 export function hasFeatureCached(key: FeatureKey): boolean {
-  return cachedFeatures.has(key);
+  return cachedExpiry > Date.now() / 1000 && cachedFeatures.has(key);
 }
 
 /** Synchronous user-context snapshot for telemetry. Reads the primed cache. */
 export function getEntitlementSnapshot(): EntitlementSnapshot {
-  return cachedSnapshot;
+  return cachedExpiry > Date.now() / 1000 ? cachedSnapshot : FREE_SNAPSHOT;
 }
 
 /**

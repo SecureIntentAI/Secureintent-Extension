@@ -57,9 +57,15 @@ export async function offlineUsed(): Promise<number> {
 }
 
 /** Consume one unit if under the limit. Returns the post-consume state. */
-export async function offlineConsume(): Promise<{ used: number; allowed: boolean }> {
-  const used = await readCount();
-  if (used >= OFFLINE_LIMIT) return { used, allowed: false };
-  await writeCount(used + 1);
-  return { used: used + 1, allowed: true };
+let consumeTail: Promise<unknown> = Promise.resolve();
+export function offlineConsume(): Promise<{ used: number; allowed: boolean }> {
+  const work = async () => {
+    const used = await readCount();
+    if (used >= OFFLINE_LIMIT) return { used, allowed: false };
+    await writeCount(used + 1);
+    return { used: used + 1, allowed: true };
+  };
+  const next = consumeTail.then(work, work);
+  consumeTail = next.catch(() => undefined);
+  return next;
 }
