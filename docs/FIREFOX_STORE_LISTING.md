@@ -18,7 +18,7 @@ secureintent
 
 ## Summary  (AMO limit ~250 chars)
 ```
-Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.
+Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.
 ```
 
 ## Description  (paste as-is — plain text, keep the • bullets and blank lines)
@@ -26,8 +26,9 @@ Blocks secret pastes locally. Business teams receive limited AI-service security
 SecureIntent warns you the moment you're about to paste an API key, token, password, or other secret into a website where it doesn't belong — like AI chat and coding assistants.
 
 How it works
-• Detection runs entirely on your device. Your pasted text is never sent anywhere.
+• Detection runs entirely on your device. SecureIntent does not send inspected text to its servers; the destination site receives it only when the paste proceeds.
 • When a secret is detected, a warning appears with clear choices: Cancel, Paste anyway, or Paste anonymously — which redacts the secret and pastes the rest.
+• Supported text files selected through a file picker or dropped onto a page are scanned locally before the page receives them. File contents and file-scan results are not sent to SecureIntent. Binary files and other upload paths are not checked.
 • Pasting a large log? It can strip out secrets, IP addresses, and emails in one step before the text goes in.
 • Only an anonymous, one-way fingerprint of a detected secret is ever sent, and only for aggregate reporting — never the secret itself, and never your text.
 
@@ -41,7 +42,7 @@ Free & Pro
 Core detection and warnings are free, including a monthly allowance of Anonymise & Paste. Pro unlocks unlimited Anonymise & Paste, large-log sanitizing, restoring anonymized values later in the same session, and a PIN lock for high-risk cloud consoles. Pro is entirely optional — the free protection works with no sign-up.
 
 Privacy first
-Raw pasted text, prompts, secrets, and URL paths never leave your device. The extension computes a salted, one-way hash on-device for anonymous reporting. For Business organisation members who accept the in-product disclosure, it also reports limited activity at recognised AI services: the service hostname, paste byte count, and secret-warning outcome. It never reports page content, URLs, prompts, or pasted text; free and Developer Pro installs do not send this Business metadata. We never sell your data.
+SecureIntent does not send raw pasted text, supported file contents, prompts, or secret values to its servers. Files are scanned locally before the page receives them; if a paste or upload proceeds, the destination site receives that content. The extension computes a salted, one-way hash on-device for anonymous reporting about text pastes; file scans do not generate telemetry. For Business organisation members who accept the in-product disclosure, it also reports limited activity at recognised AI services: the service hostname, text-paste byte count, and secret-warning outcome. It does not report page content, URLs, prompts, pasted text, file contents, or file-scan findings; free and Developer Pro installs do not send this Business metadata. We never sell your data.
 ```
 
 ## Category
@@ -86,11 +87,14 @@ What this maps to for the listing/consent UI:
   (a salted one-way SHA-256 hash of a detected secret — never the secret itself),
   detection type, action chosen, plan tier, random install id. Opt-in via the
   in-product consent gate.
-- **Optional — Website activity** — only the **domain** where a paste was
-  intercepted (e.g. `chatgpt.com`), for coverage metrics. **No page content.**
+- **Optional — Website activity** — recognised AI-service hostnames and the **domain**
+  where a text paste was intercepted (e.g. `chatgpt.com`), for coverage metrics. **No
+  page content or file contents.** Local file checks do not emit telemetry.
 
-> `websiteContent` is intentionally NOT declared — raw pasted text never leaves the
-> device. `technicalAndInteraction` is valid only in `optional` (not `required`).
+> `websiteContent` is intentionally NOT declared — SecureIntent does not transmit raw
+> pasted text or selected file contents to its servers. A destination site receives the
+> content only when the user allows the paste or upload. `technicalAndInteraction` is
+> valid only in `optional` (not `required`).
 > The key is read by FF 140+; older Firefox ignores it, so the min version stays 115.
 
 ---
@@ -139,6 +143,8 @@ Notes:
 - eval/innerHTML flagged by the validator come from the bundled React DOM and Clerk
   SDK, not from our source. Our code never calls eval; overlays render into a CLOSED
   shadow root.
-- Raw pasted text never leaves the device; only a salted one-way hash + metadata is
-  sent, and only after in-product consent.
+- SecureIntent never sends raw pasted text or selected file contents to its servers.
+  Paste reporting uses a salted one-way hash + metadata after in-product consent;
+  local file scans do not generate telemetry. The destination site receives content
+  only when the paste or upload proceeds.
 ```

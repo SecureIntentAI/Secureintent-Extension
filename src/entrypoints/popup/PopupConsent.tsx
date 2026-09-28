@@ -54,14 +54,16 @@ export function PopupConsent({ onAccept }: { onAccept: () => void }) {
         </div>
         <h2 className="si-consent-gate-title">Catch secrets before you paste</h2>
         <p className="si-consent-gate-text">
-          On-device protection — pasted text and secret values stay in your browser.
+          Pasted text and supported text files are checked locally. SecureIntent does not send
+          inspected content, file-scan results, or secret values to its servers. A clean file check
+          passes the file to the site; you can cancel a warned upload or continue unless team policy
+          blocks it. Binary files and other upload paths are not checked.
         </p>
         <p className="si-consent-gate-text si-consent-gate-text--shadow">
           Signed-in Business organisation users also share limited Shadow AI security metadata with
           their organisation: recognised AI-service hostname, paste size, detection category, and
           warning outcome. Never prompts, pasted text, secrets, full URLs, or URL paths.
         </p>
-
         <label className="si-consent-check">
           <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
           <span className="si-consent-box" aria-hidden="true">

@@ -41,7 +41,7 @@ export default defineConfig({
           }),
       name: 'SecureIntent',
       description:
-        'Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.',
+        'Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.',
       // activeTab: read the current tab's URL (on popup open) to show which site
       // is being protected. No broad tabs permission needed.
       // cookies: required by @clerk/chrome-extension to read/sync the Clerk session
@@ -72,7 +72,7 @@ export default defineConfig({
       // ("required: none"); telemetry is opt-in behind the in-product consent gate,
       // so it's declared as optional: a salted SHA-256 fingerprint + detection
       // metadata (technical/interaction) and the paste site's domain (website
-      // activity). Raw pasted text NEVER leaves the device (never websiteContent).
+      // activity). SecureIntent never uploads raw paste/file content (never websiteContent).
       // The key is read only by FF 140+; older Firefox ignores it (hence the min
       // stays at 115 for reach — AMO treats the version note as a warning, not an
       // error). Note: `technicalAndInteraction` is valid only in `optional`.

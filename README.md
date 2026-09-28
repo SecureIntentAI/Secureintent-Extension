@@ -2,7 +2,7 @@
 
 A browser extension that warns you **before** you paste API keys, tokens, or other
 secrets into AI tools and other untrusted destinations. Detection runs entirely
-**on-device** — your pasted text never leaves the browser.
+**on-device** — SecureIntent does not send the inspected text to its servers.
 
 > Cross-browser (Chrome, Edge, Firefox, Opera) from a single codebase, built on
 > [WXT](https://wxt.dev) + React + TypeScript.
@@ -29,22 +29,30 @@ secrets into AI tools and other untrusted destinations. Detection runs entirely
   fetched as an **Ed25519-signed** config bundle and verified before use, with a remote
   kill-switch. The extension ships with an offline fallback bundle and works without
   network access.
+- **Text-file upload checks.** When protection is active, supported text files selected
+  through a file input or dropped onto a page are scanned locally before the page receives
+  them. A warning lets you cancel or continue unless team policy blocks the upload. File
+  contents and file-scan results are not sent to SecureIntent.
 
 ## Privacy model
 
-Raw pasted text is a hard privacy boundary: it never leaves the device. Telemetry, when
-sent, contains only a **salted SHA-256 fingerprint** of a detected secret (never the
+SecureIntent does not send raw pasted text or supported text-file contents to its
+servers. When a paste or upload proceeds, the destination site receives the content.
+File scans do not generate telemetry. Paste telemetry, when sent, contains only a
+**salted SHA-256 fingerprint** of a detected secret (never the
 secret itself), plus its type and label. The salt is a per-install random value stored
 locally and never transmitted. Metadata also includes the action, site, plan and,
 for team seats, organization and actor pseudonym. Business organization seats can
-report recognized AI-site visits, paste byte counts and sensitive-paste outcomes
+report recognized AI-site visits, text-paste byte counts and sensitive-paste outcomes
 after Terms acceptance. Install/uninstall attribution is also reported (Chrome
 install reporting does not wait for Terms acceptance). This is local text
 processing, not zero metadata collection.
 
-An intercepted paste fails **closed** on errors, overload or timeout: text is not
-inserted and the user can dismiss the status and retry. This is text-paste DLP,
-not interception of typing, file uploads, screenshots or all network traffic.
+An intercepted paste or supported text-file scan fails **closed** on errors, overload
+or timeout: the paste is not inserted or the file is not passed to the page, and the
+user can retry. File checks cover standard file-input selection and drag-and-drop only;
+binary files, programmatic upload paths, typing, screenshots and all network traffic
+are outside the protection boundary.
 
 ## Capacity and verification
 
@@ -106,7 +114,7 @@ pnpm exec playwright install chromium
 ```
 src/
   entrypoints/      # per-site content scripts, background service worker, popup
-  content/          # createPasteGuard — paste capture, detect, overlay, rehydrate
+  content/          # paste and text-file guards, composer discovery, rehydration
   overlay/          # closed Shadow DOM warning overlay (React)
   lib/
     detection/      # regex catalog, overlap resolution, tokenize, sanitize (Ghost)

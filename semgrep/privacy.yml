@@ -4,9 +4,10 @@ rules:
     languages: [typescript]
     severity: ERROR
     message: >
-      Raw pasted text must never leave the device. Only the salted fingerprint
-      may be sent or logged. Route paste content through detection/fingerprint,
-      not fetch/console/sendMessage.
+      Raw pasted text must never be sent to SecureIntent network services or logs.
+      Paste and file content may be processed by the local extension worker and
+      delivered to the destination only after the user allows it. Telemetry may
+      carry a salted fingerprint, never the original content.
     pattern-sources:
       - pattern: $E.clipboardData.getData(...)
     pattern-sinks:

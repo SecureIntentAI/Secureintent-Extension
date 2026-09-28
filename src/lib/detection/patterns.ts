@@ -106,6 +106,7 @@ export const PATTERNS: Pattern[] = [
     label: 'JSON credential',
     regex:
       /["'](?:api[_-]?key|access[_-]?key|client[_-]?secret|secret|token|password|passwd)["']\s*:\s*["'][^"']{8,}["']/gi,
+    validate: 'credential',
   },
   {
     type: 'known-key',
@@ -174,7 +175,8 @@ export const PATTERNS: Pattern[] = [
     // served bundle overrides this, and this is what a fresh install uses until
     // its first sync.
     regex:
-      /\b[A-Za-z0-9_]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)(?:[_-]?key)?\s*[=:]\s*["']?[^\s"']{6,}/gi,
+      /\b[A-Za-z0-9_]*(?:secret|token|password|passwd|api[_-]?key|access[_-]?key)(?:[_-]?key)?\s*[=:]\s*(?:"[^"\r\n]{6,}"|'[^'\r\n]{6,}'|[^\s"']{6,})/gi,
+    validate: 'credential',
   },
   {
     // only flagged with its label — a bare 40-char base64 string is indistinguishable from a hash

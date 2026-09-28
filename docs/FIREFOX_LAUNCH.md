@@ -1,6 +1,8 @@
 # Firefox (AMO) Launch Kit
 
-Everything needed to publish SecureIntent to addons.mozilla.org (AMO). Chrome is
+Packaging commands and reviewer notes for addons.mozilla.org (AMO). A v1.2.0
+candidate package is prepared, but Firefox runtime checks and the other release gates
+in [`UNIVERSAL_DETECTOR_DEV.md`](./UNIVERSAL_DETECTOR_DEV.md) remain open. Chrome is
 unaffected — the Firefox-only manifest settings are scoped by `browser === 'firefox'`
 in [`wxt.config.ts`](../wxt.config.ts).
 
@@ -10,19 +12,22 @@ in [`wxt.config.ts`](../wxt.config.ts).
 
 | Item | State |
 |------|-------|
-| Firefox MV2 build (`pnpm build:firefox`) | ✅ builds clean, 0 errors |
-| `browser_specific_settings.gecko.id` = `secureintent@secureintent.ai` | ✅ set (Firefox only) |
-| `gecko.strict_min_version` = `115.0` | ✅ set (storage.session floor) |
-| Chrome-only `key` stripped from Firefox manifest | ✅ (avoids AMO warning) |
-| `web-ext lint` | ✅ **0 errors**, 67 warnings (all from bundled React/deps — see §7) |
-| Extension zip + sources zip | ✅ generated (`pnpm zip:firefox`) |
-| Clerk publishable key baked into bundle | ✅ present (`pk_live_…`, public by design) |
+| Firefox MV2 v1.2.0 build | ✅ generated from current worktree |
+| `browser_specific_settings.gecko.id` = `secureintent@secureintent.ai` | ✅ confirmed in candidate manifest |
+| `gecko.strict_min_version` = `115.0` | ✅ confirmed in candidate manifest |
+| Chrome-only `key` stripped from Firefox manifest | ✅ confirmed in candidate manifest |
+| `web-ext lint` | ⏳ not run against the v1.2.0 candidate |
+| Extension zip + sources zip | ✅ generated; `.env` and local test artifacts excluded from sources |
+| Firefox runtime smoke test | ⏳ outstanding |
 
 **Artifacts to upload** (in `dist/`):
-- `secureintent-extension-1.0.7-firefox.zip` — the add-on package (upload this)
-- `secureintent-extension-1.0.7-sources.zip` — source for reviewers (see §6; required)
+- `secureintent-extension-1.2.0-firefox.zip` — local candidate package; submit only after release approval
+- `secureintent-extension-1.2.0-sources.zip` — source for reviewers (see §6; required)
+- `secureintent-extension-1.2.0-SHA256SUMS.txt` — checksums for the Chrome, Firefox, and source ZIPs
 
-Regenerate anytime with: `pnpm zip:firefox`
+Regenerate the package with: `pnpm zip:firefox`. Regenerate the source archive from the
+current release worktree while excluding `.env`, dependencies, generated bundles, and
+local test artifacts.
 
 ---
 
@@ -117,8 +122,8 @@ Two SDK-specific blockers (both avoided by the cookie path above):
 
 1. **Developer Hub → Submit a New Add-on.**
 2. Distribution: **On this site (listed)**.
-3. Upload `dist/secureintent-extension-1.0.7-firefox.zip`. Wait for the automated validation (0 errors expected).
-4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/secureintent-extension-1.0.7-sources.zip`. Paste the reviewer notes from §6.
+3. Upload `dist/secureintent-extension-1.2.0-firefox.zip` only after the release gates pass. Wait for the automated validation (0 errors expected).
+4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/secureintent-extension-1.2.0-sources.zip`. Paste the reviewer notes from §6.
 5. Answer the **data collection** questions using §5.
 6. Fill the **listing** using §4.
 7. Submit for review.
@@ -134,7 +139,7 @@ the sources zip + §6 notes are what clear it.
 - **Name:** `SecureIntent`
 - **Add-on URL slug:** `secureintent`
 - **Summary (≤250 chars):**
-  > Blocks secret pastes locally. Business teams receive limited AI-service security metadata—never prompts, pasted text, or secrets.
+  > Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.
 - **Category:** Privacy & Security
 - **Description:** reuse the detailed description from [`docs/store-listing.md`](./store-listing.md) (plain text renders fine on AMO).
 - **Screenshots:** `store-assets/banner-1280x800.png` (add 2–3 more of the real warning overlay if available).
@@ -166,11 +171,14 @@ automatically — there is no separate form to fill:
   salted, one-way SHA-256 hash of a detected secret — never the secret itself),
   detection type/label, action chosen, plan tier, random install id. Opt-in via the
   in-product consent gate.
-- **Optional — `websiteActivity`** — only the **domain** where a paste was intercepted
-  (e.g. `chatgpt.com`). **No page content.**
+- **Optional — `websiteActivity`** — recognised AI-service hostnames and the **domain**
+  where a text paste was intercepted (e.g. `chatgpt.com`). **No page content or file
+  contents.** Local file checks do not emit telemetry.
 
 Notes:
-- `websiteContent` is intentionally NOT declared — raw pasted text never leaves the device.
+- `websiteContent` is intentionally NOT declared — SecureIntent does not transmit raw
+  pasted text or selected file contents to its servers. A destination site receives the
+  content only when the user allows the paste or upload.
 - `technicalAndInteraction` is valid only in `optional`, never in `required` (putting it
   in `required` fails validation).
 - The key is read by **FF 140+**; older Firefox ignores it, so `strict_min_version`
@@ -203,20 +211,24 @@ Notes:
 - eval/innerHTML flagged by the validator come from the bundled React DOM and Clerk
   SDK, not from our source. Our code never calls eval; overlays render into a CLOSED
   shadow root.
-- Raw pasted text never leaves the device; only a salted one-way hash + metadata is
-  sent, and only after in-product consent.
+- SecureIntent never sends raw pasted text or selected file contents to its servers.
+  Paste reporting uses a salted one-way hash + metadata after in-product consent;
+  local file scans do not generate telemetry. The destination site receives content
+  only when the paste or upload proceeds.
 ```
 
 ---
 
 ## 7. `web-ext lint` result (informational)
 
-`npx web-ext lint --source-dir dist/firefox-mv2` → **0 errors**, 67 warnings, 0 notices.
+The 0-error/67-warning/0-notice result below is historical and was not run against
+v1.2.0. Its recorded warning classes were `UNSAFE_VAR_ASSIGNMENT` (React DOM, ×64)
+and `DANGEROUS_EVAL` (bundled dependencies, ×2). The current local environment does
+not have `web-ext`; run it against v1.2.0 before AMO submission and record the actual
+candidate-specific result here.
 
-- `UNSAFE_VAR_ASSIGNMENT` (innerHTML) ×64 — React DOM. Standard, non-blocking.
-- `DANGEROUS_EVAL` ×2 — bundled dep. Triggers human review; cleared by §6 source + notes.
-
-None block submission. Re-run anytime: `npx web-ext lint --source-dir dist/firefox-mv2`.
+Do not treat the historical result as evidence for the v1.2.0 candidate. Run:
+`npx web-ext lint --source-dir dist/firefox-mv2`.
 
 ---
 
@@ -227,8 +239,8 @@ WXT can submit straight to AMO with API keys:
 ```bash
 # store the AMO issuer/secret as env or in .env.submit (never commit)
 npx wxt submit \
-  --firefox-zip dist/secureintent-extension-1.0.7-firefox.zip \
-  --firefox-sources-zip dist/secureintent-extension-1.0.7-sources.zip
+  --firefox-zip dist/secureintent-extension-1.2.0-firefox.zip \
+  --firefox-sources-zip dist/secureintent-extension-1.2.0-sources.zip
 ```
 
 Requires `AMO_JWT_ISSUER` / `AMO_JWT_SECRET` (from §2). Same review applies.

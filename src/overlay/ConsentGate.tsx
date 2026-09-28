@@ -5,22 +5,25 @@ import { openPolicyPage, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 export interface ConsentGateProps {
   /** Accept the current Terms & Privacy. */
   onAgree: () => void;
-  /** Dismiss without accepting — this paste is discarded, nothing is inserted. */
+  /** Dismiss without accepting; the pending paste or file action is discarded. */
   onCancel: () => void;
+  /** Which pending action is discarded when consent is dismissed. */
+  contentKind?: 'paste' | 'file';
 }
 
 /**
- * Blocking consent gate shown on the first paste that would trigger a warning,
- * before the extension protects anything. Same closed-shadow overlay chrome as
+ * Blocking consent gate shown before the first protected paste or file scan.
+ * Same closed-shadow overlay chrome as
  * the paste warning — including the same three ways out (Escape, the ×, a click
  * on the scrim), because a dialog the user can't dismiss is a trap, and this one
  * appears on top of their own work.
  *
- * Dismissing maps to the same outcome as the warning dialog's Cancel: the paste
- * was already `preventDefault`-ed, so it is dropped. That is stated in the copy —
- * a silently swallowed paste is what made this gate feel broken.
+ * Dismissing discards the already-intercepted paste or selected file. That is
+ * stated in the copy — silently swallowing the user's action made this gate feel
+ * broken.
  */
-export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
+export function ConsentGate({ onAgree, onCancel, contentKind = 'paste' }: ConsentGateProps) {
+  const isFile = contentKind === 'file';
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
@@ -35,7 +38,11 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
         className="si-hud si-consent"
         role="alertdialog"
         aria-modal="true"
-        aria-label="Accept the Terms of Service and Privacy Policy to enable SecureIntent"
+        aria-label={
+          isFile
+            ? 'Accept the Terms and Privacy Policy to enable SecureIntent file checks'
+            : 'Accept the Terms and Privacy Policy to enable SecureIntent paste protection'
+        }
         onClick={(e) => e.stopPropagation()}
       >
         <div className="si-top">
@@ -48,7 +55,9 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
           <button
             type="button"
             className="si-x"
-            aria-label="Dismiss — this paste is discarded"
+            aria-label={
+              isFile ? 'Dismiss — file upload is cancelled' : 'Dismiss — paste is discarded'
+            }
             onClick={onCancel}
           >
             &times;
@@ -58,16 +67,27 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
         <div className="si-rule" />
 
         <div className="si-consent-body">
-          <h1 className="si-consent-title">One quick step before we protect your pastes</h1>
+          <h1 className="si-consent-title">
+            {isFile
+              ? 'One quick step before we check this file'
+              : 'One quick step before we protect your pastes'}
+          </h1>
           <p className="si-consent-text">
-            SecureIntent analyzes pasted text <strong>on your device</strong>. Your pasted text
-            and secret values never leave the browser.
+            SecureIntent checks pasted text <strong>on your device</strong> and does not send it or
+            secret values to its servers. If you allow a paste, the destination site receives the
+            text.
           </p>
           <p className="si-consent-text si-consent-text--shadow">
             For signed-in Business organisation users, Shadow AI sends limited security metadata to
             their organisation: recognised AI-service hostname, paste size, detection category, and
             warning outcome. It never sends prompts, pasted text, secret values, full URLs, or URL
             paths.
+          </p>
+          <p className="si-consent-text">
+            Supported text files are scanned locally before the page receives them. SecureIntent
+            does not send file contents or file-scan results to its servers. A clean check passes
+            the file to the site; you can cancel a warned upload or continue unless team policy
+            blocks it. Binary files and other upload paths are not checked.
           </p>
           <p className="si-consent-links">
             <a href={TOS_URL} onClick={openPolicyPage(TOS_URL)}>
@@ -81,8 +101,9 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
         </div>
 
         <p className="si-consent-note">
-          Closing this discards the paste you just made — nothing is inserted and nothing is sent
-          anywhere. Copy it again once you've agreed.
+          {isFile
+            ? 'Closing this cancels the selected file; the page will not receive it.'
+            : "Closing this discards the paste you just made — nothing is inserted. Copy it again once you've agreed."}
         </p>
 
         <div className="si-actions">

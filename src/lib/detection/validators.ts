@@ -1,7 +1,24 @@
 // Post-match validators confirm a regex candidate, so broad regexes don't
 // produce false positives.
 
-export type ValidatorName = 'card' | 'entropy';
+export type ValidatorName = 'card' | 'credential' | 'entropy';
+
+const PLACEHOLDER_VALUE =
+  /^(?:changeme|replace[_ -]?me|your[_ -]?(?:api[_ -]?)?(?:key|token|secret)|example|sample|placeholder|dummy|test|none|null|undefined|redacted|<[^>]+>|\*+)$/i;
+
+export function isPlaceholderCredentialValue(raw: string): boolean {
+  let value = raw.trim();
+  if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
+    value = value.slice(1, -1).trim();
+  }
+  return PLACEHOLDER_VALUE.test(value);
+}
+
+function credential(raw: string): boolean {
+  const separator = raw.search(/[=:]/);
+  if (separator < 0) return true;
+  return !isPlaceholderCredentialValue(raw.slice(separator + 1));
+}
 
 function luhn(digits: string): boolean {
   let sum = 0;
@@ -43,7 +60,11 @@ function entropy(raw: string): boolean {
   return shannon(raw) >= 3;
 }
 
-const VALIDATORS: Record<ValidatorName, (raw: string) => boolean> = { card, entropy };
+const VALIDATORS: Record<ValidatorName, (raw: string) => boolean> = {
+  card,
+  credential,
+  entropy,
+};
 
 // Unknown names pass through (fail open, never block a paste).
 export function validateMatch(name: string | undefined, raw: string): boolean {

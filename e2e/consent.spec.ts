@@ -61,7 +61,7 @@ test('consent gate blocks the first paste and unblocks after agreeing', async ({
 
   // Restore the pre-accepted state for any later specs in this worker.
   await sw.evaluate(() =>
-    chrome.storage.sync.set({ si_terms_consent: { version: 2, acceptedAt: Date.now() } }),
+    chrome.storage.sync.set({ si_terms_consent: { version: 3, acceptedAt: Date.now() } }),
   );
 });
 
@@ -92,6 +92,6 @@ test('welcome page: agree is gated on the checkbox and records consent', async (
   expect(stored.si_terms_consent).toBeTruthy();
 
   await sw.evaluate(() =>
-    chrome.storage.sync.set({ si_terms_consent: { version: 2, acceptedAt: Date.now() } }),
+    chrome.storage.sync.set({ si_terms_consent: { version: 3, acceptedAt: Date.now() } }),
   );
 });

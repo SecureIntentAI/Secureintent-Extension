@@ -1,6 +1,7 @@
 import { yieldToBrowser } from '../async';
 import type { Pattern } from './patterns';
 import { PATTERNS, TYPE_RANK } from './patterns';
+import { detectStructuredCredentials, detectUnknownTokens } from './structured';
 import type { Detection, SecretType } from './types';
 import { validateMatch } from './validators';
 
@@ -80,15 +81,30 @@ function* scanSecrets(
     yield;
   }
 
+  // A team may explicitly replace the built-in catalogue. Respect that choice;
+  // otherwise supplement known formats with value-aware JSON/.env detection.
+  if (patterns.some((pattern) => pattern.origin !== 'team')) {
+    raw.push(...detectStructuredCredentials(text, maxFindings - raw.length));
+    if (patterns.some((pattern) => pattern.validate === 'entropy')) {
+      raw.push(...detectUnknownTokens(text, maxFindings - raw.length));
+    }
+  }
+
   // Resolve overlaps: prefer higher rank, then longer match.
   //
   // A type this build doesn't know ranks lowest rather than producing NaN. The
   // bundle validator accepts unfamiliar types so a new one never invalidates a
   // whole bundle, which only works if the ranking survives seeing one.
-  const rankOf = (t: string) => TYPE_RANK[t as SecretType] ?? 0;
+  const rankOf = (d: Detection) =>
+    d.label === 'Structured credential' ? 0.9 : (TYPE_RANK[d.type as SecretType] ?? 0);
   raw.sort((a, b) => {
-    const rank = rankOf(b.type) - rankOf(a.type);
+    const rank = rankOf(b) - rankOf(a);
     if (rank !== 0) return rank;
+    // The catalogue's JSON rule spans the field name as well as its value.
+    // A structured finding with the same label isolates just the value.
+    if (a.label === 'JSON credential' && b.label === a.label) {
+      return a.end - a.start - (b.end - b.start);
+    }
     return b.end - b.start - (a.end - a.start);
   });
 

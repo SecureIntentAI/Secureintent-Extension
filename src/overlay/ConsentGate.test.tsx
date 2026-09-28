@@ -52,6 +52,13 @@ describe('ConsentGate', () => {
     expect(screen.getByText(/nothing is inserted/i)).toBeTruthy();
   });
 
+  test('file consent explains that dismissing cancels the file upload', () => {
+    render(<ConsentGate contentKind="file" onAgree={vi.fn()} onCancel={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: /before we check this file/i })).toBeTruthy();
+    expect(screen.getByText(/cancels the selected file/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /file upload is cancelled/i })).toBeTruthy();
+  });
+
   test('the Escape listener is removed on unmount', () => {
     const { unmount, onCancel } = renderGate();
     unmount();

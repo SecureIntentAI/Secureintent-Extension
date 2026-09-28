@@ -22,8 +22,12 @@ overload, cancellation, timeouts, queue writes and cross-session result isolatio
 Semgrep was unavailable locally. Firefox runtime and live authenticated business
 backend/desktop interoperability were not verified in this run.
 
-This work targets text-paste DLP. It does not claim to intercept manual typing,
-uploads, images, arbitrary embedded editors, or browser-restricted pages.
+This verification predates the local text-file upload guard and does not verify it.
+The guard is scoped to supported text files selected through standard file inputs
+or dropped onto pages where the content script runs. It does not cover binary files,
+programmatic upload paths, arbitrary embedded editors, or browser-restricted pages.
+File contents and file-scan results are processed locally and do not generate telemetry.
+The v1.2.0 file-guard changes still require their own unit, browser, and Firefox checks.
 
 ## Resource behavior
 

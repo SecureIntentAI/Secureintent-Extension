@@ -20,8 +20,8 @@ describe('consentSatisfied', () => {
   test('newer stored version → true', () => {
     expect(consentSatisfied({ version: TERMS_VERSION + 5, acceptedAt: 1 })).toBe(true);
   });
-  test('older stored version → false (re-prompt after terms change)', () => {
-    expect(consentSatisfied({ version: 1, acceptedAt: 1 }, 2)).toBe(false);
+  test('previous terms version → false (re-prompt after terms change)', () => {
+    expect(consentSatisfied({ version: TERMS_VERSION - 1, acceptedAt: 1 })).toBe(false);
   });
 });
 

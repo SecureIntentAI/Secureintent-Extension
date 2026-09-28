@@ -11,14 +11,16 @@ the full Statement of Work, scope, and timeline.
 The end-to-end design:
 
 - Content scripts capture **paste events** and render warnings in a **closed Shadow DOM overlay**
-  (closed so host pages can't inspect or tamper with it).
+  for UI isolation. The host element remains in the page; the closed root is not an anti-tampering
+  boundary.
 - A **client-side pre-filter** does cheap detection on-device using a signed pattern bundle fetched
   from the Worker. The `killSwitch` field in the bundle can disable the guard remotely.
-- Telemetry posts to the Worker, which inserts straight into **ClickHouse** (`ctx.waitUntil`; no Queue
-  yet). Pattern bundles are Ed25519-signed and refreshed every 2 hours via a background alarm (and on
-  popup demand).
-- **Raw pasted text never leaves the device** — only a salted SHA-256 fingerprint is sent. Treat this
-  privacy boundary as a hard constraint in any code that touches paste content.
+- Standard detection telemetry posts to the Worker for **ClickHouse** ingestion. Business Shadow AI
+  metadata uses a bounded local retry queue. Pattern bundles are Ed25519-signed and refreshed on a
+  background schedule (and on popup demand).
+- **SecureIntent never sends raw paste or scanned file content to its servers.** Paste telemetry
+  may include a salted SHA-256 fingerprint and limited metadata. If a user allows a paste or upload,
+  the destination site receives that content. Keep this boundary explicit in code and copy.
 - Cross-browser from one codebase: Chrome, Edge, Firefox, Opera. Chrome ships MV3, Firefox MV2.
 
 ### Sibling repos (each its own git remote, all part of one product)
@@ -178,11 +180,12 @@ src/
 
 ## Key invariants
 
-- **Raw pasted text never leaves the device** — only the salted SHA-256 fingerprint is computed and
-  sent in telemetry. Never log or transmit paste text. The same boundary applies to the vault (token →
-  secret pairs live only in `storage.session`, never on disk, never to network).
-- The overlay uses a **closed** shadow root; both guards **fail open** (any error lets the paste/page
-  through rather than trapping the user).
+- **Raw content never goes to SecureIntent servers** — paste telemetry may contain a salted SHA-256
+  fingerprint, never the original text or secret value. Supported file scans are local and generate
+  no file telemetry. A destination receives content when the user allows the paste or upload. Never
+  log or send raw content to SecureIntent. Vault token → secret pairs live only in `storage.session`.
+- The overlay uses a **closed** shadow root for UI isolation. Paste and supported text-file checks
+  fail closed on scanner errors, overload, or timeout; content is not passed to the page unchecked.
 - The paste handler must call `preventDefault`/`stopImmediatePropagation` **synchronously**, before
   any `await`. The `enabled` flag and the vault snapshot are cached in local vars (refreshed via
   watchers) and read synchronously — don't turn those into `await`s inside the handler.

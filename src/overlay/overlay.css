@@ -642,6 +642,7 @@
 }
 .si-consent-body {
   padding: 16px 18px 8px;
+  overflow-y: auto;
 }
 .si-consent-title {
   margin: 0 0 8px;

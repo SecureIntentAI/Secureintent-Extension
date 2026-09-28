@@ -202,7 +202,7 @@ function App() {
       <footer className="si-pop-footer">
         <span
           className="si-privacy-badge"
-          title="Your text is analyzed on-device and never leaves the browser"
+          title="SecureIntent checks text locally and does not send it to its servers"
         >
           <LocalShieldIcon />
           Local text processing

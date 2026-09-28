@@ -355,15 +355,15 @@
         const hf = H * 0.088;
         ctx.font = `750 ${hf}px ${getSans()}`;
         ctx.fillStyle = "#fff";
-        ctx.fillText("Your text never leaves", cx, H * 0.56);
+        ctx.fillText("SecureIntent never receives", cx, H * 0.56);
         ctx.fillStyle = CYAN;
-        ctx.fillText("your device.", cx, H * 0.56 + hf * 1.08);
+        ctx.fillText("your raw content.", cx, H * 0.56 + hf * 1.08);
         ctx.fillStyle = "#aeb7c0";
         ctx.font = `400 ${H * 0.03}px ${getSans()}`;
-        ctx.fillText("On-device detection. Only a one-way hash is ever sent — never your secrets.", cx, H * 0.8);
+        ctx.fillText("On-device checks. Only approved metadata is sent — never raw content.", cx, H * 0.8);
         ctx.fillStyle = CYAN;
         ctx.font = `600 ${H * 0.025}px ${getMono()}`;
-        ctx.fillText("On-device   ·   No raw text   ·   Privacy first", cx, H * 0.9);
+        ctx.fillText("Local checks   ·   No raw content to SecureIntent   ·   Privacy first", cx, H * 0.9);
         ctx.textAlign = "left";
       }
 

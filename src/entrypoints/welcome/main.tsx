@@ -328,8 +328,14 @@ function Welcome() {
           <p className="w-sub w-shadow-notice">
             If you are signed in to a Business organisation, Shadow AI sends that organisation
             limited security metadata: recognised AI-service hostname, paste size, detection
-            category, and warning outcome. Prompts, pasted text, secret values, full URLs, and URL
-            paths never leave your browser.
+            category, and warning outcome. SecureIntent does not send prompts, pasted text, secret
+            values, full URLs, or URL paths to the organisation.
+          </p>
+          <p className="w-sub w-shadow-notice">
+            When protection is active, supported text files selected or dropped into a page are
+            scanned on this device before the page receives them. File contents and file-scan
+            results are not sent to SecureIntent. Binary files and other upload paths are not
+            checked. A possible secret can be cancelled or uploaded unless your team blocks it.
           </p>
 
           <label className="w-consent">
