@@ -68,57 +68,106 @@ interface PasteJob {
   reportOutcome?: (action: DlpAction) => void;
 }
 
+function editableText(el: HTMLElement): string {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  return range.toString();
+}
+
+function expectedEditableText(
+  el: HTMLElement,
+  selection: Selection,
+  text: string,
+): string | null {
+  const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
+  if (
+    !anchorNode ||
+    !focusNode ||
+    !el.contains(anchorNode) ||
+    !el.contains(focusNode)
+  )
+    return null;
+
+  const offsetOf = (node: Node, offset: number) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.setEnd(node, offset);
+    return range.toString().length;
+  };
+  const start = offsetOf(anchorNode, anchorOffset);
+  const end = offsetOf(focusNode, focusOffset);
+  const before = editableText(el);
+  const from = Math.min(start, end);
+  const to = Math.max(start, end);
+  return before.slice(0, from) + text + before.slice(to);
+}
+
 function insertText(el: HTMLElement, text: string, selection?: PasteJob['selection']): void {
   el.focus();
-  // Some sites (e.g. GitHub Copilot) select the whole field on programmatic
-  // focus. Collapse any active selection first so we append at the caret
-  // instead of overwriting the user's existing text.
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-    if (selection && 'start' in selection) {
-      el.setSelectionRange(selection.start, selection.end);
-    } else if (el.selectionStart !== el.selectionEnd) {
-      const caret = el.selectionEnd ?? el.value.length;
-      el.setSelectionRange(caret, caret);
+    const start = selection && 'start' in selection ? selection.start : el.selectionStart;
+    const end = selection && 'end' in selection ? selection.end : el.selectionEnd;
+    if (start === null || end === null) throw new Error('The editor selection is unavailable');
+    if (start < 0 || end < start || end > el.value.length) {
+      throw new Error('The saved paste position is no longer valid');
     }
-  } else {
-    const sel = window.getSelection();
-    if (selection instanceof Range && el.contains(selection.commonAncestorContainer)) {
-      sel?.removeAllRanges();
-      sel?.addRange(selection);
-    } else if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
-      // Rich editors (e.g. Kimi's Lexical) drop the selection when focus moves
-      // to our overlay, leaving execCommand nowhere to insert. Restore a caret
-      // at the end of the editor.
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    } else if (!sel.isCollapsed) {
-      sel.collapseToEnd();
-    }
+    const expected = el.value.slice(0, start) + text + el.value.slice(end);
+    el.setSelectionRange(start, end);
+    document.execCommand('insertText', false, text);
+    if (el.value !== expected) throw new Error('The editor did not accept the checked text');
+    return;
   }
 
+  const sel = window.getSelection();
+  if (selection instanceof Range) {
+    if (!el.contains(selection.commonAncestorContainer)) {
+      throw new Error('The saved paste position is no longer available');
+    }
+    sel?.removeAllRanges();
+    sel?.addRange(selection);
+  } else if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+  if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) {
+    throw new Error('The editor selection could not be restored');
+  }
+  const expected = expectedEditableText(el, sel, text);
+  if (expected === null) throw new Error('The editor selection could not be checked');
+
   // Slate editors (e.g. Discord, Notion) keep their own model and ignore
-  // execCommand inserts — the text appears but the message stays unsendable.
-  // Feed them a synthetic paste instead, which their paste handler reconciles
-  // into editor state. (Our guard ignores it: it's not a trusted event.)
+  // execCommand inserts, so let their paste handler update the editor state.
   const slate = el.closest('[data-slate-editor="true"]');
   if (slate) {
+    let handled = false;
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
-      const handled = !slate.dispatchEvent(
+      handled = !slate.dispatchEvent(
         new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
       );
-      if (handled) return; // editor consumed the paste
     } catch {
-      // DataTransfer/ClipboardEvent unavailable — fall through to execCommand.
+      // Clipboard event support can vary; try the browser insertion path.
+    }
+    if (handled) {
+      if (editableText(el) !== expected) {
+        throw new Error('The editor did not accept the checked text');
+      }
+      return;
     }
   }
 
-  if (!document.execCommand('insertText', false, text))
+  const inserted = document.execCommand('insertText', false, text);
+  if (el.isContentEditable) {
+    if (editableText(el) !== expected) {
+      throw new Error('The editor did not accept the checked text');
+    }
+  } else if (!inserted) {
     throw new Error('The editor refused insertion');
+  }
 }
 
 // Content scripts from the same extension share one isolated-world `window`, so a
@@ -179,7 +228,7 @@ export async function createPasteGuard(
     present(job, () => mountPasteStatus(ctx, kind, () => finish(job)));
   const failed = async (job: PasteJob, error: unknown) => {
     if (!live(job)) return;
-    siError(config.name, 'paste operation failed; text remains blocked', error);
+    siError(config.name, 'paste operation failed; insertion was not confirmed', error);
     try {
       await status(job, 'error');
     } catch {
@@ -200,11 +249,11 @@ export async function createPasteGuard(
       await failed(job, error);
     }
   };
-  const insert = (job: PasteJob, text: string, preserveSelection = false) => {
+  const insert = (job: PasteJob, text: string) => {
     if (!live(job) || !job.input.isConnected) return;
     job.inserting = true;
     try {
-      insertText(job.input, text, preserveSelection ? job.selection : undefined);
+      insertText(job.input, text, job.selection);
     } finally {
       job.inserting = false;
     }
@@ -509,7 +558,7 @@ export async function createPasteGuard(
       if (scan.total === 0 && !destinationBlocked) {
         // Plain-text insertion only after a complete scan, preserving the
         // user's original selection even if focusing the site changes it.
-        await act(pending, () => insert(pending, text, true));
+        await act(pending, () => insert(pending, text));
         return;
       }
       // Show the actual secret warning for this paste. Extracted so the

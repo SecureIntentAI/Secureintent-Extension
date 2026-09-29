@@ -10,7 +10,7 @@ const messages: Record<PasteStatus, [string, string]> = {
   ],
   error: [
     'Paste could not be completed',
-    'Dismiss this message and check the input before trying again.',
+    'SecureIntent could not confirm the paste. Check the text box before retrying.',
   ],
 };
 

@@ -1,4 +1,5 @@
 import type { Detection } from '../types';
+import { githubTokenChecksum } from '../validators';
 
 export interface DetectorCorpusCase {
   id: string;
@@ -9,6 +10,11 @@ export interface DetectorCorpusCase {
 
 const unknownToken = 'SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3';
 const envCredential = 'new-provider-8Jc5M9qR2vT6xY4z';
+const checksumPayload = 'SyntheticPayload0123456789ABCD';
+const syntheticGitHubToken = `ghp_${checksumPayload}${githubTokenChecksum(checksumPayload)}`;
+const syntheticNpmToken = `npm_${checksumPayload}${githubTokenChecksum(checksumPayload)}`;
+const checksum = githubTokenChecksum(checksumPayload);
+const invalidChecksum = `${checksum[0] === '0' ? '1' : '0'}${checksum.slice(1)}`;
 
 /** Synthetic regression corpus for the v1.2.0 detector; no live credentials. */
 export const detectorCorpusV1_2_0 = {
@@ -21,8 +27,13 @@ export const detectorCorpusV1_2_0 = {
     },
     {
       id: 'known-github-token',
-      text: `ghp_${'a'.repeat(36)}`,
-      expected: [{ label: 'GitHub token', match: `ghp_${'a'.repeat(36)}` }],
+      text: syntheticGitHubToken,
+      expected: [{ label: 'GitHub token', match: syntheticGitHubToken }],
+    },
+    {
+      id: 'known-npm-token-with-checksum',
+      text: syntheticNpmToken,
+      expected: [{ label: 'npm token', match: syntheticNpmToken }],
     },
     {
       id: 'json-unknown-api-key',
@@ -38,6 +49,21 @@ export const detectorCorpusV1_2_0 = {
       id: 'dotenv-unknown-credential',
       text: `SERVICE_CREDENTIAL=${envCredential}`,
       expected: [{ label: 'Structured credential', match: envCredential }],
+    },
+    {
+      id: 'yaml-camel-case-api-key',
+      text: `service:\n  apiKey: ${unknownToken} # synthetic`,
+      expected: [{ label: 'Structured credential', match: unknownToken }],
+    },
+    {
+      id: 'xml-client-secret',
+      text: `<service><clientSecret>${envCredential}</clientSecret></service>`,
+      expected: [{ label: 'Structured credential', match: envCredential }],
+    },
+    {
+      id: 'http-bearer-authorization',
+      text: `Authorization: Bearer ${unknownToken}`,
+      expected: [{ label: 'Structured credential', match: unknownToken }],
     },
     {
       id: 'dotenv-quoted-password',
@@ -93,6 +119,26 @@ export const detectorCorpusV1_2_0 = {
       expected: [],
     },
     {
+      id: 'yaml-public-key',
+      text: `publicKey: ${unknownToken}`,
+      expected: [],
+    },
+    {
+      id: 'yaml-api-key-placeholder',
+      text: 'apiKey: "replace me"',
+      expected: [],
+    },
+    {
+      id: 'xml-client-id',
+      text: `<clientId>${envCredential}</clientId>`,
+      expected: [],
+    },
+    {
+      id: 'authorization-placeholder',
+      text: 'Authorization: Bearer changeme',
+      expected: [],
+    },
+    {
       id: 'json-password-placeholder',
       text: '{"password":"changeme"}',
       expected: [],
@@ -130,6 +176,16 @@ export const detectorCorpusV1_2_0 = {
     {
       id: 'short-github-like-value',
       text: 'ghp_abcdefghijklmnopqrstuvwx',
+      expected: [],
+    },
+    {
+      id: 'github-token-with-invalid-checksum',
+      text: `ghp_${checksumPayload}${invalidChecksum}`,
+      expected: [],
+    },
+    {
+      id: 'npm-token-with-invalid-checksum',
+      text: `npm_${checksumPayload}${invalidChecksum}`,
       expected: [],
     },
     {

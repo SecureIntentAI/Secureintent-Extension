@@ -1,6 +1,15 @@
 import { expect, test } from 'vitest';
 import { detectSecrets } from './index';
 import { PATTERNS } from './patterns';
+import { githubTokenChecksum } from './validators';
+
+function base64UrlJson(value: Record<string, unknown>): string {
+  return btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function syntheticJwt(header: Record<string, unknown>, claims: Record<string, unknown>): string {
+  return `${base64UrlJson(header)}.${base64UrlJson(claims)}.c3ludGhldGljLXNpZw`;
+}
 
 test('finds unknown keys in nested JSON and removes only the value', () => {
   const value = 'SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3';
@@ -25,11 +34,73 @@ test('finds unknown secrets in .env assignments and skips placeholders', () => {
   ]);
 });
 
+test.each([
+  ['YAML', `service:\n  apiKey: SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3 # comment`],
+  ['XML', '<service><clientSecret>new-provider-8Jc5M9qR2vT6xY4z</clientSecret></service>'],
+  ['HTTP authorization', 'Authorization: Bearer SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3'],
+])('finds credential values in %s and keeps redaction offsets value-only', (_format, text) => {
+  const findings = detectSecrets(text);
+  expect(findings).toHaveLength(1);
+  expect(findings[0].label).toBe('Structured credential');
+  expect(text.slice(findings[0].start, findings[0].end)).toBe(findings[0].match);
+  expect(findings[0].match).not.toMatch(/apiKey|clientSecret|Authorization|Bearer/);
+});
+
+test('does not promote public identifiers or placeholders in added formats', () => {
+  expect(detectSecrets('publicKey: SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3')).toEqual([]);
+  expect(detectSecrets('apiKey: "replace me"')).toEqual([]);
+  expect(detectSecrets('<clientId>new-provider-8Jc5M9qR2vT6xY4z</clientId>')).toEqual([]);
+  expect(detectSecrets('Authorization: Bearer changeme')).toEqual([]);
+});
+
 test('known provider detector still wins when it overlaps a structured value', () => {
   const value = `sk-${'a'.repeat(30)}`;
   const findings = detectSecrets(JSON.stringify({ apiKey: value }));
   expect(findings).toHaveLength(1);
   expect(findings[0].label).toBe('OpenAI API key');
+});
+
+test('validates the offline checksum on current GitHub and npm token formats', () => {
+  const payload = 'SyntheticPayload0123456789ABCD';
+  const checksum = githubTokenChecksum(payload);
+  const githubToken = `ghp_${payload}${checksum}`;
+  const npmToken = `npm_${payload}${checksum}`;
+  const badChecksum = `${checksum[0] === '0' ? '1' : '0'}${checksum.slice(1)}`;
+
+  expect(detectSecrets(githubToken)).toMatchObject([
+    { label: 'GitHub token', match: githubToken },
+  ]);
+  expect(detectSecrets(npmToken)).toMatchObject([{ label: 'npm token', match: npmToken }]);
+  expect(detectSecrets(`ghp_${payload}${badChecksum}`)).toEqual([]);
+  expect(detectSecrets(`npm_${payload}${badChecksum}`)).toEqual([]);
+
+  // Older GitHub tokens do not carry the newer checksum and remain recognized.
+  const legacyGitHubToken = `ghp_${'a'.repeat(40)}`;
+  expect(detectSecrets(legacyGitHubToken)).toMatchObject([
+    { label: 'GitHub token', match: legacyGitHubToken },
+  ]);
+});
+
+test('checks JWT compact structure without claiming signature validity', () => {
+  const jwt = syntheticJwt(
+    { alg: 'HS256', typ: 'JWT' },
+    { sub: 'synthetic-user', exp: 2_000_000_000 },
+  );
+  expect(detectSecrets(jwt)).toMatchObject([{ label: 'JWT', match: jwt }]);
+
+  const encodedHeader = base64UrlJson({ alg: 'HS256', typ: 'JWT' });
+  expect(detectSecrets(`${encodedHeader}.bm90LWpzb24.c3ludGhldGljLXNpZw`)).toEqual([]);
+  expect(detectSecrets(`${encodedHeader}.${base64UrlJson({ sub: 'synthetic-user' })}.`)).toEqual(
+    [],
+  );
+});
+
+test('detects GitHub stateless installation tokens as a whole opaque token', () => {
+  const jwt = syntheticJwt({ alg: 'RS256', typ: 'JWT' }, { iss: 'synthetic-app' });
+  const token = `ghs_12345_${jwt}`;
+  expect(detectSecrets(token)).toMatchObject([
+    { label: 'GitHub App installation token', match: token },
+  ]);
 });
 
 test('a team-only replacement catalogue suppresses built-in structured detection', () => {

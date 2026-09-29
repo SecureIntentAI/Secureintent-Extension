@@ -44,7 +44,17 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'GitHub token',
-    regex: /gh[pousr]_[A-Za-z0-9]{36,}/g,
+    // Short opaque ghs tokens use the checksum format; GitHub's newer
+    // stateless installation tokens are matched separately below.
+    regex: /gh[pour]_[A-Za-z0-9]{36,}|ghs_[A-Za-z0-9]{36,}/g,
+    validate: 'github-checksum',
+  },
+  {
+    type: 'known-key',
+    label: 'GitHub App installation token',
+    // Current stateless ghs tokens have the form ghs_APPID_JWT. Treat the
+    // embedded JWT as opaque; GitHub explicitly says clients must not validate it.
+    regex: /ghs_[A-Za-z0-9]+_eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
   },
   {
     type: 'known-key',
@@ -64,7 +74,8 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'JWT',
-    regex: /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
+    regex: /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g,
+    validate: 'jwt-structure',
   },
   {
     type: 'known-key',
@@ -80,6 +91,7 @@ export const PATTERNS: Pattern[] = [
     type: 'known-key',
     label: 'npm token',
     regex: /npm_[A-Za-z0-9]{36}/g,
+    validate: 'npm-checksum',
   },
   {
     type: 'known-key',

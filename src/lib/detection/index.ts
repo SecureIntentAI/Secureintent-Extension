@@ -41,6 +41,7 @@ function* scanSecrets(
   maxFindings = Infinity,
 ): Generator<void, Detection[]> {
   const raw: Detection[] = [];
+  let rejectedStructuredCandidates: Uint8Array | undefined;
   let steps = 0;
 
   for (const pattern of patterns) {
@@ -58,25 +59,47 @@ function* scanSecrets(
         regex.lastIndex += unicode && (text.codePointAt(regex.lastIndex) ?? 0) > 0xffff ? 2 : 1;
         continue;
       }
-      if (validateMatch(pattern.validate, m[0])) {
-        // Generic entropy hits inside a URL are link ids (Loom/Drive/…), not secrets.
-        if (pattern.validate === 'entropy' && inUrl(text, m.index, m.index + m[0].length)) {
-          continue;
+      if (!validateMatch(pattern.validate, m[0])) {
+        // A checksum/serialization failure is strong evidence that this is a
+        // lookalike for a recognized provider format. Prevent the aggressive
+        // entropy fallback from immediately re-flagging the same rejected text.
+        if (
+          pattern.validate === 'github-checksum' ||
+          pattern.validate === 'npm-checksum' ||
+          pattern.validate === 'jwt-structure'
+        ) {
+          rejectedStructuredCandidates ??= new Uint8Array(text.length);
+          rejectedStructuredCandidates.fill(1, m.index, m.index + m[0].length);
         }
-        const det: Detection = {
-          type: pattern.type,
-          label: pattern.label,
-          match: m[0],
-          start: m.index,
-          end: m.index + m[0].length,
-        };
-        // Carried so the UI can say which findings came from the team's own
-        // rules. Attached only when the pattern had it, so a detection from the
-        // default catalogue is the same object it has always been.
-        if (pattern.origin !== undefined) det.origin = pattern.origin;
-        if (raw.length >= maxFindings) throw new RangeError('Too many findings to process safely');
-        raw.push(det);
+        continue;
       }
+      // Generic entropy hits inside a URL are link ids (Loom/Drive/…), not secrets.
+      if (pattern.validate === 'entropy' && inUrl(text, m.index, m.index + m[0].length)) {
+        continue;
+      }
+      if (pattern.validate === 'entropy' && rejectedStructuredCandidates) {
+        let fullyRejected = true;
+        for (let i = m.index; i < m.index + m[0].length; i++) {
+          if (!rejectedStructuredCandidates[i]) {
+            fullyRejected = false;
+            break;
+          }
+        }
+        if (fullyRejected) continue;
+      }
+      const det: Detection = {
+        type: pattern.type,
+        label: pattern.label,
+        match: m[0],
+        start: m.index,
+        end: m.index + m[0].length,
+      };
+      // Carried so the UI can say which findings came from the team's own
+      // rules. Attached only when the pattern had it, so a detection from the
+      // default catalogue is the same object it has always been.
+      if (pattern.origin !== undefined) det.origin = pattern.origin;
+      if (raw.length >= maxFindings) throw new RangeError('Too many findings to process safely');
+      raw.push(det);
     }
     yield;
   }
@@ -96,7 +119,9 @@ function* scanSecrets(
   // bundle validator accepts unfamiliar types so a new one never invalidates a
   // whole bundle, which only works if the ranking survives seeing one.
   const rankOf = (d: Detection) =>
-    d.label === 'Structured credential' ? 0.9 : (TYPE_RANK[d.type as SecretType] ?? 0);
+    // Prefer value-only structured findings over the older assignment regex,
+    // which includes the field name and separator in the redacted span.
+    d.label === 'Structured credential' ? 1.1 : (TYPE_RANK[d.type as SecretType] ?? 0);
   raw.sort((a, b) => {
     const rank = rankOf(b) - rankOf(a);
     if (rank !== 0) return rank;
