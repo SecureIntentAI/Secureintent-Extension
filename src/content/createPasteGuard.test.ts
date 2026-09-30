@@ -805,6 +805,148 @@ describe('createPasteGuard — team policy', () => {
   const lastProps = () => mountOverlayMock.mock.calls.at(-1)![1];
   const inserts = () => (document.execCommand as ReturnType<typeof vi.fn>).mock.calls;
 
+  test('applies and removes a destination block in the same running guard', async () => {
+    const t = setup();
+    await t.start();
+    await savePolicy({ blockedSites: [location.hostname] });
+    const blocked = t.makeEvent('ordinary text');
+    await t.firePaste(blocked);
+    expect(blocked.preventDefault).toHaveBeenCalled();
+    expect(lastProps().policyBlock).toEqual({ host: location.hostname });
+    lastOnAction()('cancel');
+    await savePolicy({ blockedSites: [] });
+    const allowed = t.makeEvent('ordinary text');
+    await t.firePaste(allowed);
+    expect(allowed.preventDefault).not.toHaveBeenCalled();
+  });
+
+  test('invalidates an open warning when policy changes, including its stale action callback', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const oldAction = lastOnAction();
+    const handle = await mountOverlayMock.mock.results[0].value;
+    await savePolicy({ blockInsteadOfWarn: true });
+    expect(handle.remove).toHaveBeenCalledOnce();
+    oldAction('paste');
+    oldAction('redact');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    await t.firePaste(t.makeEvent(SECRET));
+    expect(lastProps().blockRawPaste).toBe(true);
+  });
+
+  test('a policy update prevents fail-open recovery from a late mount rejection', async () => {
+    let reject!: (error: Error) => void;
+    mountOverlayMock.mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        }),
+    );
+    const t = setup();
+    await t.start();
+    const pending = t.firePaste(t.makeEvent(SECRET));
+    await vi.waitFor(() => expect(reject).toBeTypeOf('function'));
+    await savePolicy({ blockedSites: [location.hostname] });
+    reject(new Error('late mounting failure'));
+    await pending;
+    expect(document.execCommand).not.toHaveBeenCalled();
+    await t.firePaste(t.makeEvent('ordinary text'));
+    expect(lastProps().policyBlock).toBeTruthy();
+  });
+
+  test('an older initialization read cannot overwrite a newer watched policy', async () => {
+    let release!: (bundle: typeof DEFAULT_BUNDLE) => void;
+    const read = vi.spyOn(configItem, 'getValue').mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    try {
+      const t = setup();
+      const boot = t.start();
+      await savePolicy({ blockedSites: [location.hostname] });
+      release(DEFAULT_BUNDLE);
+      await boot;
+      const e = t.makeEvent('ordinary text');
+      await t.firePaste(e);
+      expect(e.preventDefault).toHaveBeenCalled();
+      expect(lastProps().policyBlock).toBeTruthy();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test.each([
+    'selector',
+    'regex',
+    'flags',
+  ] as const)('retains the last working policy after an invalid %s update', async (invalid) => {
+    await savePolicy({ blockedSites: [location.hostname] });
+    const t = setup();
+    await t.start();
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      ...(invalid === 'selector'
+        ? { sites: { chatgpt: { inputSelector: '[' } } }
+        : {
+            patterns: [
+              {
+                type: 'known-key',
+                label: 'invalid',
+                regex: invalid === 'regex' ? '[' : 'secret',
+                flags: invalid === 'flags' ? 'i' : 'g',
+              },
+            ],
+          }),
+    });
+    const e = t.makeEvent('ordinary text');
+    await t.firePaste(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(lastProps().policyBlock).toBeTruthy();
+  });
+
+  test('updates patterns, selector, and kill switch together', async () => {
+    const t = setup();
+    await t.start();
+    const editor = document.createElement('textarea');
+    editor.id = 'new-editor';
+    document.body.append(editor);
+    const bundle = {
+      ...DEFAULT_BUNDLE,
+      sites: { chatgpt: { inputSelector: '#new-editor' } },
+      patterns: [{ type: 'known-key' as const, label: 'Team token', regex: 'ACME-SENSITIVE' }],
+    };
+    await saveBundle(bundle);
+    const e = t.makeEvent('ACME-SENSITIVE', editor);
+    await t.firePaste(e);
+    expect(e.preventDefault).toHaveBeenCalled();
+    expect(lastProps().detections[0].label).toBe('Team token');
+    lastOnAction()('cancel');
+    await saveBundle({ ...bundle, killSwitch: true });
+    const skipped = t.makeEvent('ACME-SENSITIVE', editor);
+    await t.firePaste(skipped);
+    expect(skipped.preventDefault).not.toHaveBeenCalled();
+    await saveBundle({ ...bundle, killSwitch: false });
+    const resumed = t.makeEvent('ACME-SENSITIVE', editor);
+    await t.firePaste(resumed);
+    expect(resumed.preventDefault).toHaveBeenCalled();
+  });
+
+  test('updates Ghost tuning in the running guard', async () => {
+    const t = setup();
+    await t.start();
+    const text = 'host 10.0.0.5';
+    const before = t.makeEvent(text);
+    await t.firePaste(before);
+    expect(before.preventDefault).not.toHaveBeenCalled();
+    await saveBundle({ ...DEFAULT_BUNDLE, ghost: { minChars: 1 } });
+    const after = t.makeEvent(text);
+    await t.firePaste(after);
+    expect(after.preventDefault).toHaveBeenCalled();
+    expect(lastProps().summary.total).toBe(1);
+  });
+
   test('regression: a bundle with NO policy behaves exactly as before', async () => {
     const t = setup();
     await t.start();

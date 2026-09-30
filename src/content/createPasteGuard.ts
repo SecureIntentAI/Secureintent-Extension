@@ -1,6 +1,6 @@
 import { browser, type ContentScriptContext, storage } from '#imports';
 import { contentHash } from '@/lib/bridge/hash';
-import { DEFAULT_BUNDLE, getActiveBundle } from '@/lib/config';
+import { configItem, DEFAULT_BUNDLE, getActiveBundle } from '@/lib/config';
 import { acceptTerms, consentItem, consentSatisfied, isConsentAccepted } from '@/lib/consent';
 import { elapsedMs, siDebug, siError } from '@/lib/debug';
 import { detectSecrets, sanitize, summarize, TOKEN_RE, tokenizeSecrets } from '@/lib/detection';
@@ -118,7 +118,11 @@ export async function createPasteGuard(
   let initialization: Promise<void> = Promise.resolve();
   let entitlementReady: Promise<void> = Promise.resolve();
   let saltPromise: ReturnType<typeof getOrCreateSalt> | undefined;
-  type Interaction = { phase: 'pending' | 'warning' | 'inserting'; remove?: () => void };
+  type Interaction = {
+    phase: 'pending' | 'warning' | 'inserting';
+    remove?: () => void;
+    cancel?: () => void;
+  };
   let active: Interaction | null = null;
   const disposers: (() => void)[] = [];
   const origin = location.origin;
@@ -161,7 +165,15 @@ export async function createPasteGuard(
         const input = selector ? findComposer(path, selector) : null;
         if (!input) return;
         const restoreSelection = capturePasteSelection(input);
-        const insert = (value: string) => insertText(input, value, restoreSelection);
+        let insertionRuntime = runtime;
+        const insert = (value: string) => {
+          // UI callbacks and fail-open recovery must not commit a decision made
+          // under an obsolete snapshot. Explicitly paused/disabled startup pastes
+          // retain their normal replay behavior.
+          if (runtime !== insertionRuntime) return;
+          if (enabled && !runtime.bundle.killSwitch && runtime.policyBlockedHost) return;
+          insertText(input, value, restoreSelection);
+        };
         const interaction: Interaction = { phase: 'pending' };
         const current = () => !disposed && active === interaction;
         finish = () => {
@@ -169,6 +181,7 @@ export async function createPasteGuard(
           active = null;
           interaction.remove?.();
         };
+        interaction.cancel = finish;
         const intercept = () => {
           stop();
           active = interaction;
@@ -179,6 +192,7 @@ export async function createPasteGuard(
           heldAtStartup = true;
           await initialization;
           if (!current()) return;
+          insertionRuntime = runtime;
           if (
             !enabled ||
             runtime.bundle.killSwitch ||
@@ -278,7 +292,7 @@ export async function createPasteGuard(
         intercept();
         if (allowRawPaste)
           recoverPaste = () => {
-            if (current()) insert(text);
+            if (current() && runtime.allowRawPaste) insert(text);
           };
         // Show the actual secret warning for this paste. Extracted so the
         // consent gate can call it after the user agrees (first-paste consent).
@@ -368,7 +382,7 @@ export async function createPasteGuard(
                 // policy has to hold even if the overlay were driven some other
                 // way. Under a block the paste is simply dropped (= cancel).
                 if (action === 'paste') {
-                  if (allowRawPaste) insert(text);
+                  if (runtime.allowRawPaste) insert(text);
                 } else if (action === 'sanitize' && proAction && !policyBlockedHost) {
                   // Ghost: strip every finding to a typed placeholder. Irreversible.
                   insert(sanitize(text, detections));
@@ -478,6 +492,28 @@ export async function createPasteGuard(
     { capture: true },
   );
 
+  // Subscribe before the initial read: a late initial read must never overwrite
+  // a newer update. Build the whole replacement before swapping anything.
+  let configGeneration = 0;
+  disposers.push(
+    configItem.watch((value) => {
+      if (disposed) return;
+      try {
+        const next = createGuardRuntime(value ?? DEFAULT_BUNDLE, config, location.hostname);
+        runtime = next;
+        configGeneration++;
+        // Drop the outstanding paste and its callbacks. The user can paste again
+        // under the new rules; a config change never authorizes insertion itself.
+        // A startup paste has not been evaluated yet and will use the latest state.
+        if (initialized) active?.cancel?.();
+        siDebug(config.name, 'guard configuration updated', { version: next.bundle.version });
+      } catch (err) {
+        siError(config.name, 'keeping previous guard configuration', err);
+      }
+    }),
+  );
+  const initialGeneration = configGeneration;
+
   // Local settings/config readiness is independent of auth, telemetry, and vault
   // I/O. An early paste is already stopped while this promise is pending.
   initialization = (async () => {
@@ -487,7 +523,8 @@ export async function createPasteGuard(
       isConsentAccepted(),
     ]);
     if (disposed) return;
-    runtime = createGuardRuntime(bundle, config, location.hostname);
+    if (configGeneration === initialGeneration)
+      runtime = createGuardRuntime(bundle, config, location.hostname);
     enabled = storedEnabled;
     consented = storedConsent;
     disposers.push(
