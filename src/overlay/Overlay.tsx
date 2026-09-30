@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Logo } from '@/components/Logo';
 import { type Detection, type GhostSummary, locateInText } from '@/lib/detection';
+import { useDialogFocus } from './useDialogFocus';
 
 export type OverlayAction = 'paste' | 'redact' | 'cancel' | 'sanitize' | 'upgrade' | 'rehydrate';
 
@@ -48,7 +49,16 @@ export interface OverlayProps {
   onAction: (action: OverlayAction) => void;
 }
 
-export function Overlay({
+export function Overlay(props: OverlayProps) {
+  const focusRef = useDialogFocus();
+  return (
+    <div ref={focusRef}>
+      <OverlayContent {...props} />
+    </div>
+  );
+}
+
+function OverlayContent({
   site,
   text,
   detections,

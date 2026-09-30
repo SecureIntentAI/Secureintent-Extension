@@ -19,6 +19,22 @@ function renderOverlay(onAction: (a: OverlayAction) => void = () => {}, pro = tr
 afterEach(() => document.body.replaceChildren());
 
 describe('Overlay', () => {
+  test('moves focus to Cancel, contains Tab navigation, and restores focus on unmount', () => {
+    const editor = document.createElement('textarea');
+    document.body.append(editor);
+    editor.focus();
+    const { unmount } = renderOverlay();
+    expect(document.activeElement).toBe(screen.getByText('Cancel'));
+    const last = screen.getByText('Paste anonymously');
+    last.focus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(document.activeElement).toBe(screen.getByLabelText('Cancel'));
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    unmount();
+    expect(document.activeElement).toBe(editor);
+  });
+
   test('shows each detection label and an accessible name with the site', () => {
     renderOverlay();
     expect(screen.getByText('OpenAI API key')).toBeTruthy();
