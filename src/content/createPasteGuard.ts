@@ -280,6 +280,10 @@ export async function createPasteGuard(
     { capture: true },
   );
 
+  // The catch-all guard may be starting in parallel on this same page. Claim
+  // the site before yielding so it will not intercept and queue the same paste.
+  if (!isFallback) markDedicated();
+
   const salt: Salt | undefined = await getOrCreateSalt(browserStore).catch((error) => {
     siError(config.name, 'fingerprint salt unavailable; telemetry suppressed', error);
     return undefined;
@@ -926,7 +930,6 @@ export async function createPasteGuard(
     }
   };
   processPaste = onPaste;
-  if (!isFallback) markDedicated(); // claim ownership only after capture listeners exist
   void drainStartupQueue();
   const protectionListener = (
     message: unknown,
