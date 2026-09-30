@@ -6,6 +6,8 @@ export type ValidatorName =
   | 'credential'
   | 'entropy'
   | 'github-checksum'
+  | 'iban'
+  | 'ipv6'
   | 'jwt-structure'
   | 'npm-checksum';
 
@@ -49,6 +51,69 @@ function card(raw: string): boolean {
   return luhn(d);
 }
 
+// ISO 13616 electronic-format shape and MOD-97-10 check digit validation.
+function iban(raw: string): boolean {
+  const value = raw.replace(/\s/g, '').toUpperCase();
+  if (value.length < 15 || value.length > 34 || !/^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(value))
+    return false;
+
+  const rearranged = value.slice(4) + value.slice(0, 4);
+  let remainder = 0;
+  for (const character of rearranged) {
+    const code = character.charCodeAt(0);
+    if (code >= 48 && code <= 57) {
+      remainder = (remainder * 10 + code - 48) % 97;
+    } else {
+      const numeric = code - 55; // A=10 through Z=35; append its two decimal digits.
+      remainder = (remainder * 100 + numeric) % 97;
+    }
+  }
+  return remainder === 1;
+}
+
+/** Validate an IPv6 literal, including compressed and IPv4-mapped forms. */
+function ipv6(raw: string): boolean {
+  let address = raw;
+  const zoneAt = address.indexOf('%');
+  if (zoneAt !== -1) {
+    if (address.indexOf('%', zoneAt + 1) !== -1) return false;
+    const zone = address.slice(zoneAt + 1);
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(zone)) return false;
+    address = address.slice(0, zoneAt);
+  }
+
+  if (!address.includes(':')) return false;
+  if (address.includes('.')) {
+    const lastColon = address.lastIndexOf(':');
+    if (lastColon < 0) return false;
+    const octets = address.slice(lastColon + 1).split('.');
+    if (
+      octets.length !== 4 ||
+      octets.some((octet) => !/^(?:0|[1-9]\d{0,2})$/.test(octet) || Number(octet) > 255)
+    ) {
+      return false;
+    }
+    const first = ((Number(octets[0]) << 8) | Number(octets[1])).toString(16);
+    const second = ((Number(octets[2]) << 8) | Number(octets[3])).toString(16);
+    address = `${address.slice(0, lastColon + 1)}${first}:${second}`;
+  }
+
+  const compressionAt = address.indexOf('::');
+  if (
+    address.includes(':::') ||
+    (compressionAt !== -1 && address.indexOf('::', compressionAt + 2) !== -1)
+  ) {
+    return false;
+  }
+
+  const compressed = compressionAt !== -1;
+  const halves = compressed ? address.split('::') : [address];
+  if (halves.length > 2) return false;
+  const groups = halves.flatMap((half) => (half ? half.split(':') : []));
+  if (groups.some((group) => !/^[0-9A-Fa-f]{1,4}$/.test(group))) return false;
+  return compressed ? groups.length < 8 : groups.length === 8;
+}
+
 function shannon(s: string): number {
   if (!s) return 0;
   const freq = new Map<string, number>();
@@ -64,6 +129,18 @@ function shannon(s: string): number {
 // Bits-per-char threshold flags hashes / random secrets but skips repetitive runs.
 function entropy(raw: string): boolean {
   return shannon(raw) >= 3;
+}
+
+const FINGERPRINT_FIELD =
+  /(?:^|[^\w])(?:sha(?:1|224|256|384|512)(?:sum)?|md5(?:sum)?|checksum|digest|etag|content[_ -]?hash|hash|git[_ -]?commit|commit(?:[_ -]?(?:sha|hash|id))?|revision|rev|build[_ -]?id|artifact[_ -]?id)\s*(?:["']?\s*[:=]\s*["']?|\s+)$/i;
+
+/** True when an unknown high-entropy value is explicitly labeled as a fingerprint or identifier. */
+export function hasFingerprintContext(text: string, start: number): boolean {
+  const left = text.slice(Math.max(0, start - 128), start);
+  return (
+    FINGERPRINT_FIELD.test(left) ||
+    /(?:^|[^\w])integrity\s*["']?\s*[:=]\s*["']?\s*sha(?:256|384|512)-$/i.test(left)
+  );
 }
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -158,6 +235,8 @@ const VALIDATORS: Record<ValidatorName, (raw: string) => boolean> = {
   credential,
   entropy,
   'github-checksum': githubChecksum,
+  iban,
+  ipv6,
   'jwt-structure': jwtStructure,
   'npm-checksum': npmChecksum,
 };

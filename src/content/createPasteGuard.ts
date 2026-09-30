@@ -1,7 +1,7 @@
 import { browser, type ContentScriptContext, storage } from '#imports';
 import { abortable, withDeadline } from '@/lib/async';
 import {
-  aiPasteBlocked,
+  aiPasteMode,
   DEFAULT_BUNDLE,
   getActiveBundle,
   getPolicy,
@@ -25,11 +25,13 @@ import {
   type Fingerprint,
   getOrCreateSalt,
   type KeyValueStore,
+  type Salt,
 } from '@/lib/fingerprint';
 import { createPasteProcessor } from '@/lib/paste/client';
 import { MAX_PASTE_CHARS, type PasteProcessor, type ScanResult } from '@/lib/paste/protocol';
 import { consumeAnonymize, formatQuotaReset, getAnonymizeStatus } from '@/lib/quota';
 import { recognizeAiPage } from '@/lib/shadow/catalog';
+import { demoPolicyItem, SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 import type { DlpAction } from '@/lib/shadow/visits';
 import type { TelemetryAction } from '@/lib/telemetry/types';
 import { readVaultEntries, storeVaultEntries } from '@/lib/vault/client';
@@ -100,6 +102,27 @@ function expectedEditableText(
   const from = Math.min(start, end);
   const to = Math.max(start, end);
   return before.slice(0, from) + text + before.slice(to);
+}
+
+type CapturedPaste = {
+  input: HTMLElement;
+  path: EventTarget[];
+  text: string;
+  selection?: { start: number; end: number } | Range;
+};
+
+function captureSelection(input: HTMLElement): CapturedPaste['selection'] {
+  if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
+    if (input.selectionStart !== null && input.selectionEnd !== null) {
+      return { start: input.selectionStart, end: input.selectionEnd };
+    }
+  } else {
+    const selection = window.getSelection();
+    if (selection?.rangeCount && input.contains(selection.anchorNode)) {
+      return selection.getRangeAt(0).cloneRange();
+    }
+  }
+  return undefined;
 }
 
 function insertText(el: HTMLElement, text: string, selection?: PasteJob['selection']): void {
@@ -199,9 +222,68 @@ export async function createPasteGuard(
   const guardKey = `__secureintentStarted_${config.siteKey}__`;
   if (page[guardKey]) return;
   page[guardKey] = true;
-  if (!isFallback) markDedicated(); // synchronous: runs before the awaits below
 
-  const salt = await getOrCreateSalt(browserStore);
+  // Capture paste events while storage, entitlement verification, and the
+  // active policy are loading. The old listener was registered only after
+  // those awaits, leaving a real startup window where Ctrl+V bypassed us.
+  let processPaste:
+    | ((event: Event, captured?: CapturedPaste, ownsFallbackEvent?: boolean) => Promise<void>)
+    | undefined;
+  const startupQueue: CapturedPaste[] = [];
+  let drainingStartupQueue = false;
+  const captureEarly = (event: Event, text: string): CapturedPaste | undefined => {
+    if (isFallback && dedicatedActive()) return;
+    const path = event.composedPath();
+    const input = findComposer(path, DEFAULT_BUNDLE.sites.fallback.inputSelector);
+    if (!input) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return { input, path, text, selection: captureSelection(input) };
+  };
+  const routePaste = (event: Event, text: string) => {
+    if (processPaste) {
+      if (isFallback && dedicatedActive()) return;
+      void processPaste(event);
+      return;
+    }
+    const captured = captureEarly(event, text);
+    if (captured) startupQueue.push(captured);
+  };
+  ctx.addEventListener(
+    window,
+    'paste',
+    (event) => {
+      const e = event as ClipboardEvent;
+      if (!e.isTrusted || (isFallback && dedicatedActive())) return;
+      const text = readClipboardText(e.clipboardData);
+      if (text) routePaste(event, text);
+    },
+    { capture: true },
+  );
+  ctx.addEventListener(
+    window,
+    'beforeinput',
+    (event) => {
+      const e = event as InputEvent;
+      if (!e.isTrusted || e.inputType !== 'insertFromPaste' || e.defaultPrevented) return;
+      const text = e.data || readClipboardText(e.dataTransfer);
+      if (!text) return;
+      const shim = {
+        isTrusted: true,
+        clipboardData: { getData: () => text },
+        composedPath: () => e.composedPath(),
+        preventDefault: () => e.preventDefault(),
+        stopImmediatePropagation: () => e.stopImmediatePropagation(),
+      } as unknown as ClipboardEvent;
+      routePaste(shim, text);
+    },
+    { capture: true },
+  );
+
+  const salt: Salt | undefined = await getOrCreateSalt(browserStore).catch((error) => {
+    siError(config.name, 'fingerprint salt unavailable; telemetry suppressed', error);
+    return undefined;
+  });
   let active: PasteJob | undefined;
   const live = (job: PasteJob) => active === job && !job.controller.signal.aborted;
   const finish = (job: PasteJob) => {
@@ -210,6 +292,7 @@ export async function createPasteGuard(
     active = undefined;
     job.controller.abort();
     job.ui?.remove();
+    void drainStartupQueue();
   };
   const present = async (job: PasteJob, mount: () => Promise<OverlayHandle>) => {
     if (!live(job)) return;
@@ -226,15 +309,41 @@ export async function createPasteGuard(
   };
   const status = (job: PasteJob, kind: PasteStatus) =>
     present(job, () => mountPasteStatus(ctx, kind, () => finish(job)));
-  const failed = async (job: PasteJob, error: unknown) => {
+  const failed = (job: PasteJob, error: unknown) => {
     if (!live(job)) return;
     siError(config.name, 'paste operation failed; insertion was not confirmed', error);
-    try {
-      await status(job, 'error');
-    } catch {
-      finish(job); // a broken UI must not trap subsequent pastes
-    }
+    // Keep the failure available in the console for diagnosis without showing
+    // the alarming modal. Release the job so later pastes are not held up.
+    finish(job);
   };
+  async function drainStartupQueue() {
+    if (!processPaste || drainingStartupQueue || active) return;
+    drainingStartupQueue = true;
+    try {
+      while (startupQueue.length && !active) {
+        const captured = startupQueue.shift();
+        if (!captured) continue;
+        if (!enabled || bundle.killSwitch) {
+          try {
+            insertText(captured.input, captured.text, captured.selection);
+          } catch (error) {
+            siError(config.name, 'startup paste could not be restored', error);
+          }
+          continue;
+        }
+        const replay = {
+          isTrusted: true,
+          clipboardData: { getData: () => captured.text },
+          composedPath: () => captured.path,
+          preventDefault: () => {},
+          stopImmediatePropagation: () => {},
+        } as unknown as ClipboardEvent;
+        await processPaste(replay, captured, true);
+      }
+    } finally {
+      drainingStartupQueue = false;
+    }
+  }
   const act = async (job: PasteJob, action: () => void | Promise<void>) => {
     if (!live(job) || job.handled) return;
     if (!job.input.isConnected) {
@@ -275,7 +384,7 @@ export async function createPasteGuard(
 
   // Terms & Privacy consent, cached synchronously (read in the paste handler
   // before any await). Blocking: no warning is shown until the user accepts.
-  let consented = await isConsentAccepted();
+  let consented = await isConsentAccepted().catch(() => false);
   let reportVisit = () => {};
   const stopConsent = consentItem.watch((value) => {
     consented = consentSatisfied(value);
@@ -284,7 +393,7 @@ export async function createPasteGuard(
   });
 
   // preventDefault must run before any await, so cache enabled synchronously
-  let enabled = await isEnabled();
+  let enabled = await isEnabled().catch(() => true);
   const stopEnabled = enabledItem.watch((value) => {
     enabled = value ?? true;
     if (!enabled && active) finish(active);
@@ -292,7 +401,10 @@ export async function createPasteGuard(
 
   // Prime the entitlement cache so the gate can be read synchronously in the
   // overlay action handler (pro features: rehydrate / ghost).
-  const stopEntitlement = await initEntitlementCache();
+  const stopEntitlement = await initEntitlementCache().catch((error) => {
+    siError(config.name, 'entitlement cache unavailable; using free features', error);
+    return () => {};
+  });
   const stopIdentity = entitlementItem.watch(() => {
     if (active) finish(active);
   });
@@ -303,13 +415,17 @@ export async function createPasteGuard(
     stopIdentity();
   });
 
-  let bundle = await getActiveBundle();
+  let bundle = await getActiveBundle().catch((error) => {
+    siError(config.name, 'policy unavailable; using bundled defaults', error);
+    return DEFAULT_BUNDLE;
+  });
   let compiled = mergeCatalog(compilePatterns(bundle.patterns));
-  // entropy patterns are pilot-only; standard tuning (aggressive: false) drops them
-  let patterns =
-    bundle.aggressive === false ? compiled.filter((p) => p.validate !== 'entropy') : compiled;
-  // Ghost Sanitizer: large pastes get the aggressive expanded set (keys + internal
-  // IPs + emails), entropy excluded so log hashes/SHAs don't get stripped.
+  // Email/IP detection applies at every paste length. Standard tuning can drop
+  // entropy rules, while Ghost always excludes them to preserve log hashes/SHAs.
+  let patterns = [
+    ...(bundle.aggressive === false ? compiled.filter((p) => p.validate !== 'entropy') : compiled),
+    ...GHOST_EXTRA_PATTERNS,
+  ];
   let ghostPatterns = [
     ...compiled.filter((p) => p.validate !== 'entropy'),
     ...GHOST_EXTRA_PATTERNS,
@@ -331,7 +447,12 @@ export async function createPasteGuard(
   let policyBlockedHost = isBlockedHost(location.hostname, policy.blockedSites);
   const aiPage =
     window.top === window ? recognizeAiPage(location.hostname, location.pathname) : undefined;
-  let aiBlocked = aiPasteBlocked(policy, aiPage?.id);
+  let demoRules = SHADOW_DEMO ? await demoPolicyItem.getValue().catch(() => []) : [];
+  const currentAiMode = () => SHADOW_DEMO
+    ? aiPasteMode({ ...policy, aiServices: demoRules }, aiPage?.id)
+    : aiPasteMode(policy, aiPage?.id);
+  let aiMode = currentAiMode();
+  let aiBlocked = aiMode === 'block_all';
   let destinationBlocked = policyBlockedHost || aiBlocked;
   // Under a policy that forbids the raw text, we must NOT re-insert it when our
   // own code throws: that fail-open recovery would turn our bug into exactly the
@@ -343,8 +464,12 @@ export async function createPasteGuard(
     if (active) finish(active);
     bundle = next ?? DEFAULT_BUNDLE;
     compiled = mergeCatalog(compilePatterns(bundle.patterns));
-    patterns =
-      bundle.aggressive === false ? compiled.filter((p) => p.validate !== 'entropy') : compiled;
+    patterns = [
+      ...(bundle.aggressive === false
+        ? compiled.filter((p) => p.validate !== 'entropy')
+        : compiled),
+      ...GHOST_EXTRA_PATTERNS,
+    ];
     ghostPatterns = [...compiled.filter((p) => p.validate !== 'entropy'), ...GHOST_EXTRA_PATTERNS];
     ghostMin = typeof bundle.ghost?.minChars === 'number' ? bundle.ghost.minChars : GHOST_MIN_CHARS;
     inputSelector =
@@ -352,11 +477,23 @@ export async function createPasteGuard(
       DEFAULT_BUNDLE.sites[config.siteKey]?.inputSelector;
     policy = getPolicy(bundle);
     policyBlockedHost = isBlockedHost(location.hostname, policy.blockedSites);
-    aiBlocked = aiPasteBlocked(policy, aiPage?.id);
+    aiMode = currentAiMode();
+    aiBlocked = aiMode === 'block_all';
     destinationBlocked = policyBlockedHost || aiBlocked;
     allowRawPaste = !policy.blockInsteadOfWarn && !destinationBlocked;
   });
   ctx.onInvalidated?.(stopConfig);
+  if (SHADOW_DEMO) {
+    const stopDemoPolicy = demoPolicyItem.watch((rules) => {
+      if (active) finish(active);
+      demoRules = rules ?? [];
+      aiMode = currentAiMode();
+      aiBlocked = aiMode === 'block_all';
+      destinationBlocked = policyBlockedHost || aiBlocked;
+      allowRawPaste = !policy.blockInsteadOfWarn && !destinationBlocked;
+    });
+    ctx.onInvalidated?.(stopDemoPolicy);
+  }
 
   reportVisit = () => {
     if (!aiPage || !consented) return;
@@ -378,31 +515,31 @@ export async function createPasteGuard(
 
   // Vault access is origin-bound by the background and expiry checked per read.
 
-  const onPaste = async (event: Event) => {
+  const onPaste = async (
+    event: Event,
+    captured?: CapturedPaste,
+    ownsFallbackEvent = false,
+  ) => {
     const e = event as ClipboardEvent;
     let job: PasteJob | undefined;
     const intercept = () => {
       e.preventDefault();
       e.stopImmediatePropagation();
       if (!job) {
-        job = { input, controller: new AbortController(), uiVersion: 0, handled: false };
-        if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) {
-          if (input.selectionStart !== null && input.selectionEnd !== null) {
-            job.selection = { start: input.selectionStart, end: input.selectionEnd };
-          }
-        } else {
-          const selection = window.getSelection();
-          if (selection?.rangeCount && input.contains(selection.anchorNode)) {
-            job.selection = selection.getRangeAt(0).cloneRange();
-          }
-        }
+        job = {
+          input: captured?.input ?? input,
+          controller: new AbortController(),
+          uiVersion: 0,
+          handled: false,
+          selection: captured?.selection ?? captureSelection(input),
+        };
         active = job;
       }
       return job;
     };
     let input: HTMLElement;
     try {
-      if (isFallback && dedicatedActive()) return; // a dedicated guard owns this site
+      if (isFallback && dedicatedActive() && !ownsFallbackEvent) return; // a dedicated guard owns this site
       if (!enabled) return; // protection off — let the paste through
       if (bundle.killSwitch) return; // remote kill-switch — let the paste through
       if (!e.isTrusted) return; // ignore programmatic pastes (e.g. our own re-inserts)
@@ -423,6 +560,17 @@ export async function createPasteGuard(
         // Returning alone allows Chrome's default paste to leak raw text.
         e.preventDefault();
         e.stopImmediatePropagation();
+        // Preserve a second paste that arrived while the first warning is open.
+        // It will be checked after the user resolves the current paste.
+        const queuedText = readClipboardText(e.clipboardData);
+        if (queuedText) {
+          startupQueue.push({
+            input,
+            path: e.composedPath(),
+            text: queuedText,
+            selection: captureSelection(input),
+          });
+        }
         return;
       }
 
@@ -478,6 +626,9 @@ export async function createPasteGuard(
       if (!live(pending)) return;
       const detections = scan.detections;
       const detectMs = elapsedMs(tDetect);
+      const sensitivePasteBlocked = aiMode === 'block_sensitive' && scan.total > 0;
+      destinationBlocked = policyBlockedHost || aiBlocked || sensitivePasteBlocked;
+      allowRawPaste = !policy.blockInsteadOfWarn && !destinationBlocked;
       if (aiPage && scan.total > 0 && pending.shadowPasteId) {
         let reported = false;
         pending.reportOutcome = (action) => {
@@ -496,6 +647,7 @@ export async function createPasteGuard(
             .catch(() => {});
         };
       }
+      if (destinationBlocked && scan.total > 0) pending.reportOutcome?.('blocked');
 
       // Rehydrate: if the pasted text carries our tokens, prompt to swap them
       // back to the real secrets at insert time (or keep the tokens / cancel).
@@ -583,7 +735,7 @@ export async function createPasteGuard(
         // Telemetry is per-finding (one fingerprint each). Ghost pastes can hold
         // hundreds of findings, so telemetry is skipped for them in this build.
         const fingerprintsPromise =
-          ghostMode || scan.total > detections.length
+          ghostMode || !salt || scan.total > detections.length
             ? null
             : Promise.all(
                 detections.map(async (d) => {
@@ -642,7 +794,9 @@ export async function createPasteGuard(
             quotaExhausted,
             // Team policy: a blocked destination gets the notice view (no paste
             // route at all); blockInsteadOfWarn just drops "Paste anyway".
-            policyBlock: destinationBlocked ? { host: location.hostname } : undefined,
+            policyBlock: destinationBlocked
+              ? { host: location.hostname, sensitiveOnly: sensitivePasteBlocked }
+              : undefined,
             blockRawPaste: policy.blockInsteadOfWarn,
             onAction: (action) =>
               act(pending, async () => {
@@ -771,7 +925,9 @@ export async function createPasteGuard(
       }
     }
   };
-  ctx.addEventListener(window, 'paste', (event) => onPaste(event), { capture: true });
+  processPaste = onPaste;
+  if (!isFallback) markDedicated(); // claim ownership only after capture listeners exist
+  void drainStartupQueue();
   const protectionListener = (
     message: unknown,
     _sender: unknown,
@@ -787,25 +943,4 @@ export async function createPasteGuard(
   };
   browser.runtime.onMessage.addListener(protectionListener);
   ctx.onInvalidated?.(() => browser.runtime.onMessage.removeListener(protectionListener));
-  // Some editors insert a paste through beforeinput and never leave text on the
-  // paste event. Capture that path too, and skip it when paste already ran.
-  ctx.addEventListener(
-    window,
-    'beforeinput',
-    (event) => {
-      const e = event as InputEvent;
-      if (!e.isTrusted || e.inputType !== 'insertFromPaste' || e.defaultPrevented) return;
-      const text = e.data || readClipboardText(e.dataTransfer);
-      if (!text) return;
-      return onPaste({
-        isTrusted: true,
-        defaultPrevented: false,
-        clipboardData: { getData: () => text },
-        preventDefault: () => e.preventDefault(),
-        stopImmediatePropagation: () => e.stopImmediatePropagation(),
-        composedPath: () => e.composedPath(),
-      } as unknown as ClipboardEvent);
-    },
-    { capture: true },
-  );
 }

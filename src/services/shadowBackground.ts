@@ -40,6 +40,13 @@ export function reduceShadowMessage(
     return { ...emptyVisitState(), dropped: state.dropped + state.queue.length };
   }
   if (!consented) return { ...emptyVisitState(), dropped: state.dropped + state.queue.length };
+  const event = parseShadowMessage(sender, message, now);
+  if (!event) return state;
+  return enqueueEvent(state, event, now, seat);
+}
+
+/** Shared metadata validation for live reports and the isolated local demo. */
+export function parseShadowMessage(sender: Sender, message: unknown, now: number): ShadowEvent | null {
   const body = asRecord(message);
   const type = body?.type;
   let event: ShadowEvent | null = null;
@@ -65,8 +72,7 @@ export function reduceShadowMessage(
       now,
     );
   }
-  if (!event) return state;
-  return enqueueEvent(state, event, now, seat);
+  return event;
 }
 
 type OwnedState = VisitState & { owner: string | null };

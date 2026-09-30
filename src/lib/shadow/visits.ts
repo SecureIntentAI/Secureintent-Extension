@@ -43,7 +43,9 @@ export type ShadowPolicy = {
   services: {
     serviceId: string;
     classification: 'sanctioned' | 'recognized' | 'review';
-    pasteBlocked: boolean;
+    pasteMode?: 'normal' | 'block_sensitive' | 'block_all';
+    /** Compatibility with older dashboard/API responses. */
+    pasteBlocked?: boolean;
   }[];
 };
 /** A real Clerk organisation seat. Discovery does not run for any other plan. */

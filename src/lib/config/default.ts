@@ -12,13 +12,17 @@ export const DEFAULT_BUNDLE: ConfigBundle = {
     },
     { type: 'known-key', label: 'Anthropic API key', regex: 'sk-ant-[A-Za-z0-9_-]{20,}' },
     { type: 'known-key', label: 'OpenAI API key', regex: 'sk-(?:proj-)?[A-Za-z0-9_-]{20,}' },
-    { type: 'known-key', label: 'AWS access key ID', regex: 'AKIA[0-9A-Z]{16}' },
+    {
+      type: 'known-key',
+      label: 'AWS access key ID',
+      regex: '(?:AKIA|ASIA)[0-9A-Z]{16}',
+    },
     { type: 'known-key', label: 'GitHub token', regex: 'gh[pousr]_[A-Za-z0-9]{36,}' },
     { type: 'known-key', label: 'Google API key', regex: 'AIza[0-9A-Za-z_-]{35}' },
     {
       type: 'known-key',
       label: 'Stripe key',
-      regex: '(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{20,}',
+      regex: '(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}',
     },
     { type: 'known-key', label: 'Slack token', regex: 'xox[baprs]-[0-9A-Za-z-]{10,}' },
     {
@@ -93,6 +97,13 @@ export const DEFAULT_BUNDLE: ConfigBundle = {
       label: 'Credit card number',
       regex: '\\b\\d(?:[ -]?\\d){11,18}\\b',
       validate: 'card',
+    },
+    {
+      type: 'pii',
+      label: 'IBAN',
+      regex: '\\b[A-Z]{2}\\d{2}(?: ?[A-Z0-9]){11,30}\\b',
+      flags: 'gi',
+      validate: 'iban',
     },
     {
       type: 'known-key',

@@ -53,7 +53,10 @@ export interface BundlePolicy {
 export interface AiServiceRule {
   serviceId: string;
   classification: 'sanctioned' | 'recognized' | 'review';
-  pasteBlocked: boolean;
+  /** New per-service paste enforcement. Missing on older signed bundles. */
+  pasteMode?: 'normal' | 'block_sensitive' | 'block_all';
+  /** Legacy signed-bundle field; interpreted as block_all when true. */
+  pasteBlocked?: boolean;
 }
 export interface ConfigBundle {
   version: number;

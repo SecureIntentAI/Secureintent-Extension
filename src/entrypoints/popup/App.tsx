@@ -6,6 +6,7 @@ import { isConsentAccepted } from '@/lib/consent';
 import { blockedCountItem, isEnabled } from '@/settings';
 import './App.css';
 import { AccountSection } from './AccountSection';
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 import { BridgeSettings } from './BridgeSettings';
 import { PlanCard } from './PlanCard';
 import { PopupConsent } from './PopupConsent';
@@ -153,6 +154,7 @@ function App() {
           </span>
         </div>
         <span className="si-version">v{appVersion}</span>
+        {SHADOW_DEMO && <span className="si-demo-flag">LOCAL DEMO</span>}
       </header>
 
       <AccountSection />

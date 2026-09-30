@@ -4,6 +4,7 @@ import { sendBrowserUrl, sendHandledHash } from '@/lib/bridge/client';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL } from '@/lib/clerkConfig';
 import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
+import { getActiveEntitlement } from '@/lib/entitlement';
 import { PASTE_READY } from '@/lib/paste/protocol';
 import { offlineConsume } from '@/lib/quota/offline';
 import { invalidateConfigSync, syncConfig } from '@/services/configService';
@@ -16,10 +17,12 @@ import {
 import { injectOpenTabs } from '@/services/injectOpenTabs';
 import { markInstallPending, reportInstall, syncUninstallUrl } from '@/services/installAttribution';
 import { installPasteWorkerBackground } from '@/services/pasteWorkerBackground';
-import { handleRefreshMessage, SYNC_ALARM } from '@/services/scheduler';
+import { handleRefreshMessage, SHADOW_POLICY_SYNC_ALARM, SYNC_ALARM } from '@/services/scheduler';
 import { flushShadow, installShadowBackground, recordShadow } from '@/services/shadowBackground';
 import { installVaultBackground } from '@/services/vaultBackground';
 import { isBridgeEnabled } from '@/settings';
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
+import { installShadowDemo, recordDemoShadow } from '@/services/shadowDemoBackground';
 
 const WELCOME_URL = '/welcome.html';
 
@@ -36,7 +39,8 @@ async function updateConsentBadge() {
 export default defineBackground(() => {
   installPasteWorkerBackground();
   installVaultBackground();
-  installShadowBackground();
+  if (SHADOW_DEMO) installShadowDemo();
+  else installShadowBackground();
   // First install → open the welcome/consent page. Any startup → refresh the
   // consent badge (nag until Terms & Privacy are accepted).
   browser.runtime.onInstalled.addListener((details) => {
@@ -92,7 +96,16 @@ export default defineBackground(() => {
   // currently signed-in user (a signed blob is otherwise portable between installs).
   void refreshEntitlementBg();
   browser.alarms.create(SYNC_ALARM.name, { periodInMinutes: SYNC_ALARM.periodInMinutes });
+  browser.alarms.create(SHADOW_POLICY_SYNC_ALARM.name, {
+    periodInMinutes: SHADOW_POLICY_SYNC_ALARM.periodInMinutes,
+  });
   browser.alarms.onAlarm.addListener((a) => {
+    if (a.name === SHADOW_POLICY_SYNC_ALARM.name) {
+      void getActiveEntitlement().then((entitlement) => {
+        if (entitlement.plan === 'business_pro' && entitlement.org) return syncConfig();
+      }).catch(() => {});
+      return;
+    }
     if (a.name === SYNC_ALARM.name) {
       syncConfig();
       void refreshEntitlementBg(); // ride the existing 2h alarm
@@ -102,7 +115,7 @@ export default defineBackground(() => {
   });
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
-    if (type === 'si-vault-put' || type === 'si-vault-read') return false;
+    if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo') return false;
     if (type === 'si-open-settings') {
       void browser.tabs.create({ url: browser.runtime.getURL('/popup.html') }).catch(() => {});
       return false;
@@ -118,9 +131,8 @@ export default defineBackground(() => {
         frameId: sender.frameId,
         incognito: sender.tab?.incognito,
       };
-      void recordShadow(msg, source)
-        .then(() => flushShadow())
-        .catch(() => {});
+      if (SHADOW_DEMO) void recordDemoShadow(msg, source).catch(() => {});
+      else void recordShadow(msg, source).then(() => flushShadow()).catch(() => {});
       return false;
     }
     // Per-tab badge: a content script reports how many secrets it just caught.

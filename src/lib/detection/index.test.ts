@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { detectSecrets } from './index';
+import { githubTokenChecksum } from './validators';
+
+const checksummedFixture = (prefix: string) => {
+  const payload = 'A'.repeat(30);
+  return `${prefix}${payload}${githubTokenChecksum(payload)}`;
+};
 
 describe('detectSecrets — known keys', () => {
   test('detects an OpenAI API key', () => {
@@ -33,9 +39,14 @@ describe('detectSecrets — known keys', () => {
   });
 
   test('detects a GitHub personal access token', () => {
-    const token = 'ghp_' + 'a'.repeat(36);
+    const token = checksummedFixture('gh' + 'p_');
     const dets = detectSecrets(`token=${token}`);
     expect(dets.find((d) => d.label === 'GitHub token')?.match).toBe(token);
+  });
+
+  test('does not reclassify a GitHub checksum mismatch as an unknown token', () => {
+    const invalidToken = `${'gh' + 'p_'}${'A'.repeat(30)}000000`;
+    expect(detectSecrets(invalidToken)).toEqual([]);
   });
 
   test('detects a Google API key', () => {
@@ -48,6 +59,7 @@ describe('detectSecrets — known keys', () => {
     const key = 'sk_live_' + 'c'.repeat(24);
     const dets = detectSecrets(`stripe ${key}`);
     expect(dets.find((d) => d.label === 'Stripe key')?.match).toBe(key);
+    expect(detectSecrets(`pk_test_${'c'.repeat(24)}`)).toEqual([]);
   });
 
   test('detects a Slack token', () => {
@@ -82,9 +94,14 @@ describe('detectSecrets — known keys', () => {
   });
 
   test('detects an npm token', () => {
-    const key = 'npm_0123456789abcdefghijklmnopqrstuvwxyz';
+    const key = checksummedFixture('np' + 'm_');
     const dets = detectSecrets(`npm ${key}`);
     expect(dets.find((d) => d.label === 'npm token')?.match).toBe(key);
+  });
+
+  test('does not reclassify an npm checksum mismatch as an unknown token', () => {
+    const invalidToken = `${'np' + 'm_'}${'A'.repeat(30)}000000`;
+    expect(detectSecrets(invalidToken)).toEqual([]);
   });
 
   test('detects a Hugging Face token', () => {
@@ -252,9 +269,12 @@ describe('detectSecrets — high-entropy (pilot/aggressive)', () => {
     expect(dets.find((d) => d.label === 'High-entropy hex string')).toBeTruthy();
   });
 
-  test('flags a 40-char git SHA', () => {
-    const dets = detectSecrets('commit da39a3ee5e6b4b0d3255bfef95601890afd80709');
-    expect(dets.find((d) => d.label === 'High-entropy hex string')).toBeTruthy();
+  test.each([
+    ['git commit SHA', 'commit da39a3ee5e6b4b0d3255bfef95601890afd80709'],
+    ['SHA-256 digest', 'sha256: 8f3c1a9b2d7e4f60a5c8b1e9d4f27a3c'],
+    ['markdown-formatted git SHA', '`commit da39a3ee5e6b4b0d3255bfef95601890afd80709`'],
+  ])('does not flag a labeled %s', (_label, text) => {
+    expect(detectSecrets(text)).toEqual([]);
   });
 
   test('flags a high-entropy base64 string', () => {

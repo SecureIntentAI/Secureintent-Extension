@@ -3,7 +3,7 @@ import type { Pattern } from './patterns';
 import { PATTERNS, TYPE_RANK } from './patterns';
 import { detectStructuredCredentials, detectUnknownTokens } from './structured';
 import type { Detection, SecretType } from './types';
-import { validateMatch } from './validators';
+import { hasFingerprintContext, validateMatch } from './validators';
 
 export { compilePatterns, type RawPattern } from './compile';
 export { GHOST_EXTRA_PATTERNS, GHOST_MIN_CHARS } from './ghost';
@@ -66,6 +66,7 @@ function* scanSecrets(
         if (
           pattern.validate === 'github-checksum' ||
           pattern.validate === 'npm-checksum' ||
+          pattern.validate === 'iban' ||
           pattern.validate === 'jwt-structure'
         ) {
           rejectedStructuredCandidates ??= new Uint8Array(text.length);
@@ -75,6 +76,13 @@ function* scanSecrets(
       }
       // Generic entropy hits inside a URL are link ids (Loom/Drive/…), not secrets.
       if (pattern.validate === 'entropy' && inUrl(text, m.index, m.index + m[0].length)) {
+        continue;
+      }
+      const entropyCandidateRule =
+        pattern.validate === 'entropy' ||
+        pattern.type === 'high-entropy' ||
+        /^high-entropy\b/i.test(pattern.label);
+      if (entropyCandidateRule && hasFingerprintContext(text, m.index)) {
         continue;
       }
       if (pattern.validate === 'entropy' && rejectedStructuredCandidates) {
@@ -106,10 +114,12 @@ function* scanSecrets(
 
   // A team may explicitly replace the built-in catalogue. Respect that choice;
   // otherwise supplement known formats with value-aware JSON/.env detection.
-  if (patterns.some((pattern) => pattern.origin !== 'team')) {
+  if (patterns.some((pattern) => pattern.origin !== 'team' && !pattern.supplemental)) {
     raw.push(...detectStructuredCredentials(text, maxFindings - raw.length));
     if (patterns.some((pattern) => pattern.validate === 'entropy')) {
-      raw.push(...detectUnknownTokens(text, maxFindings - raw.length));
+      raw.push(
+        ...detectUnknownTokens(text, maxFindings - raw.length, rejectedStructuredCandidates),
+      );
     }
   }
 

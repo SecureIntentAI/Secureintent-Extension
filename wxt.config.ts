@@ -5,10 +5,13 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react', '@wxt-dev/auto-icons'],
   srcDir: 'src',
   publicDir: 'src/public',
-  outDir: process.env.WXT_E2E === '1' ? 'dist-e2e' : 'dist',
+  outDir: process.env.WXT_E2E === '1' ? 'dist-e2e' : process.env.WXT_SHADOW_DEMO === '1' ? 'dist-demo' : 'dist',
   // Rasterizes src/assets/icon.svg into all manifest icon sizes at build time.
   autoIcons: {
-    baseIconPath: 'assets/icon.svg',
+    baseIconPath:
+      process.env.WXT_SHADOW_DEMO === '1' && process.env.WXT_E2E !== '1'
+        ? 'assets/shadow-demo-icon.svg'
+        : 'assets/icon.svg',
     sizes: [128, 96, 48, 32, 16],
   },
   // Vite emits <link rel="modulepreload" crossorigin> for split chunks. On a
@@ -21,6 +24,11 @@ export default defineConfig({
 
   manifest: ({ browser }) => {
     const isFirefox = browser === 'firefox';
+    // The standalone local demo gets its own extension ID so it can coexist
+    // with the installed extension. The E2E Shadow demo replaces the existing
+    // dist-e2e artifact, so retain its pinned E2E ID for a normal Reload.
+    const standaloneShadowDemo =
+      process.env.WXT_SHADOW_DEMO === '1' && process.env.WXT_E2E !== '1';
     // Local end-to-end testing: when the build is pointed at a localhost Worker or
     // a locally served landing page, the extension needs permission to reach them
     // (fetch the API, read the creator cookie). Never present in a shipped build —
@@ -33,13 +41,17 @@ export default defineConfig({
       // chrome-extension:// origins stay stable for Clerk allowed-origins +
       // CLERK_AUTHORIZED_PARTIES. Firefox ignores `key`, so omit it there (its
       // stable identity comes from browser_specific_settings.gecko.id below).
-      ...(isFirefox
+      ...(isFirefox || standaloneShadowDemo
         ? {}
         : {
             minimum_chrome_version: '109', // private offscreen Worker host
             key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6OipE3Igc3/YZr0H+I3aWot4xOqHvMyGHWuoyxpfIv6gISMyk2tWNjqAmSeMULt1EBgXvv44xdFPfWP8KUtbcr3tEgADXWFB0L6zI6GbFVdtm4Y3T/iXGLGQ3SN+yZQFPHQppY/NtXhM7d0LkAfXgL/pE6BySJzD1k8O/xlmRBuTjIOG538B5atOQO//YTSVDkKkJH9ZhOPqsbdyq5qc3R01szbD1oa2cBcteNpseI0Xp0X1LJLCq2ESfZKYxvzYJAaE7bQTcof4WUQL87gKN87NR2fQzIlwmYDg6n4BHDfwuUi3fNyuIlOemw9ugf+bSQYlsgqxdIT80GRW+M5eVwIDAQAB',
           }),
-      name: 'SecureIntent',
+      name: process.env.WXT_SHADOW_DEMO === '1' ? 'SecureIntent · Local Shadow AI Demo' : 'SecureIntent',
+      action: {
+        default_title: process.env.WXT_SHADOW_DEMO === '1' ? 'SecureIntent · Local Shadow AI Demo' : 'SecureIntent',
+        default_popup: 'popup.html',
+      },
       description:
         'Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.',
       // activeTab: read the current tab's URL (on popup open) to show which site

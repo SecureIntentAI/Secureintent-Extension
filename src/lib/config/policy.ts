@@ -30,11 +30,16 @@ function normalizeAiServices(value: unknown): AiServiceRule[] {
     )
       continue;
     if (!CLASSIFICATIONS.has(String(rule.classification))) continue;
-    if (typeof rule.pasteBlocked !== 'boolean') continue;
+    const pasteMode = ['normal', 'block_sensitive', 'block_all'].includes(String(rule.pasteMode))
+      ? (rule.pasteMode as AiServiceRule['pasteMode'])
+      : typeof rule.pasteBlocked === 'boolean'
+        ? rule.pasteBlocked ? 'block_all' : 'normal'
+        : undefined;
+    if (!pasteMode) continue;
     rules.push({
       serviceId: rule.serviceId,
       classification: rule.classification as AiServiceRule['classification'],
-      pasteBlocked: rule.pasteBlocked,
+      pasteMode,
     });
     if (rules.length >= 18) break;
   }
@@ -84,11 +89,17 @@ export function getPolicy(bundle: Pick<ConfigBundle, 'policy'> | null | undefine
 }
 
 /** Organisation policy forbids pasting into this recognised AI tool. */
+export function aiPasteMode(
+  policy: BundlePolicy,
+  serviceId: string | undefined,
+): 'normal' | 'block_sensitive' | 'block_all' {
+  if (!serviceId) return 'normal';
+  return policy.aiServices?.find((rule) => rule.serviceId === serviceId)?.pasteMode ?? 'normal';
+}
+
+/** @deprecated Use aiPasteMode; retained for consumers of the previous policy shape. */
 export function aiPasteBlocked(policy: BundlePolicy, serviceId: string | undefined): boolean {
-  if (!serviceId) return false;
-  return (
-    policy.aiServices?.some((rule) => rule.serviceId === serviceId && rule.pasteBlocked) === true
-  );
+  return aiPasteMode(policy, serviceId) === 'block_all';
 }
 
 /**

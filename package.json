@@ -35,7 +35,9 @@
     "e2e:consent": "WXT_E2E=1 pnpm build && playwright test e2e/consent.spec.ts",
     "e2e:install": "WXT_E2E=1 WXT_API_BASE=http://localhost:8788 pnpm build && playwright test e2e/install-attribution.spec.ts",
     "e2e:report": "playwright show-report",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "build:demo": "node scripts/build-shadow-demo.mjs",
+    "build:e2e:shadow": "WXT_E2E=1 node scripts/build-shadow-demo.mjs"
   },
   "dependencies": {
     "@clerk/chrome-extension": "^3.1.42",

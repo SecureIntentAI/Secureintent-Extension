@@ -142,6 +142,15 @@
   color: var(--si-muted);
   font-variant-numeric: tabular-nums;
 }
+.si-demo-flag {
+  border: 1px solid rgba(192, 175, 255, 0.45);
+  border-radius: 6px;
+  padding: 4px 7px;
+  background: rgba(135, 98, 220, 0.16);
+  color: #d4c5ff;
+  font: 600 9px / 1 var(--si-sans);
+  letter-spacing: 0.08em;
+}
 /* Usage meter (Anonymise & Paste allowance) ------------------------------- */
 /* Plan checklist --------------------------------------------------------- */
 .si-plan {

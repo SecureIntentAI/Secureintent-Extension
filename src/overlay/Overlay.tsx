@@ -47,7 +47,7 @@ export interface OverlayProps {
    * Team policy `blockedSites`: this destination is off-limits, so the dialog is
    * a notice with no paste actions at all.
    */
-  policyBlock?: { host: string };
+  policyBlock?: { host: string; sensitiveOnly?: boolean };
   /**
    * Team policy `blockInsteadOfWarn`: the warning is a block. Drops "Paste
    * anyway" so the raw text has no route in; anonymise and cancel remain.
@@ -87,6 +87,7 @@ export function Overlay({
       <PolicyBlockView
         site={site}
         host={policyBlock.host}
+        sensitiveOnly={policyBlock.sensitiveOnly === true}
         findings={findingCount}
         onAction={onAction}
       />
@@ -242,11 +243,13 @@ export function Overlay({
 function PolicyBlockView({
   site,
   host,
+  sensitiveOnly,
   findings,
   onAction,
 }: {
   site: string;
   host: string;
+  sensitiveOnly: boolean;
   findings: number;
   onAction: (action: OverlayAction) => void;
 }) {
@@ -272,8 +275,16 @@ function PolicyBlockView({
         <div className="si-rule" />
 
         <p className="si-ghost-lead">
-          Your team blocks pasting into <b>{host}</b>. This paste contained {findings} sensitive{' '}
-          {findings === 1 ? 'item' : 'items'} and was not inserted.
+          {sensitiveOnly ? (
+            <>
+              Your team blocks sensitive pastes into <b>{host}</b>. This paste contained {findings}{' '}
+              sensitive {findings === 1 ? 'item' : 'items'} and was not inserted.
+            </>
+          ) : (
+            <>
+              Your team blocks pasting into <b>{host}</b>. This paste was not inserted.
+            </>
+          )}
         </p>
         <p className="si-policy-note">Ask your workspace admin if you need access here.</p>
 

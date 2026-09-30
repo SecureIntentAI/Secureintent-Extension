@@ -1,7 +1,7 @@
 // Clerk publishable key — safe to ship in the client (it is not a secret).
 // Provided at build time via WXT env: set WXT_CLERK_PUBLISHABLE_KEY in ext/.env.
 export const CLERK_PUBLISHABLE_KEY =
-  import.meta.env.WXT_E2E === '1' ? '' : (import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '');
+  import.meta.env.WXT_E2E === '1' || import.meta.env.WXT_SHADOW_DEMO === '1' ? '' : (import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '');
 
 /** The custom Clerk JWT template that carries email + public_metadata claims. */
 export const CLERK_JWT_TEMPLATE = 'secureintent';
@@ -28,6 +28,9 @@ export const ACCOUNT_URL = `${WEB_APP_URL}/account.html`;
 
 /** The team console: seats, members, and what the team's extensions are stopping. */
 export const TEAM_URL = `${WEB_APP_URL}/team.html`;
+
+/** Live organisation Shadow AI activity and policy dashboard. */
+export const SHADOW_DASHBOARD_URL = `${WEB_APP_URL}/shadow.html`;
 
 /** True on the Firefox build (MV2). Auth takes the cookie path here, not the SDK. */
 export const IS_FIREFOX = import.meta.env.BROWSER === 'firefox';

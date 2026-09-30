@@ -5,6 +5,8 @@ export interface Pattern {
   label: string;
   regex: RegExp; // global-flagged; the whole match (m[0]) is the secret
   validate?: string; // optional post-match validator name (see validators.ts)
+  /** A built-in supplemental rule that must not opt team-only catalogs into fallback rules. */
+  supplemental?: boolean;
   /** Only a team's own patterns carry this ('team'); the catalogue below omits it. */
   origin?: PatternOrigin;
 }
@@ -39,7 +41,7 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'AWS access key ID',
-    regex: /(?:AKIA|ASIA|AIDA)[0-9A-Z]{16}/g,
+    regex: /(?:AKIA|ASIA)[0-9A-Z]{16}/g,
   },
   {
     type: 'known-key',
@@ -64,7 +66,9 @@ export const PATTERNS: Pattern[] = [
   {
     type: 'known-key',
     label: 'Stripe key',
-    regex: /(?:sk|pk|rk)_(?:live|test)_[0-9A-Za-z]{20,}/g,
+    // Publishable pk_ keys are designed to be exposed in client code. Keep
+    // secret and restricted keys, but don't warn on a public integration ID.
+    regex: /(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}/g,
   },
   {
     type: 'known-key',
@@ -201,6 +205,12 @@ export const PATTERNS: Pattern[] = [
     label: 'Credit card number',
     regex: /\b\d(?:[ -]?\d){11,18}\b/g,
     validate: 'card', // network prefix + Luhn
+  },
+  {
+    type: 'pii',
+    label: 'IBAN',
+    regex: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/gi,
+    validate: 'iban',
   },
   // Aggressive: unknown/zero-day secrets by entropy. Gated by bundle.aggressive.
   {

@@ -8,7 +8,7 @@ export interface GhostSummary {
 
 /** Short placeholder category for a finding, derived from its label. */
 function categoryFor(label: string): string {
-  if (label === 'IP address' || label === 'Internal IP') return 'ip';
+  if (label === 'IP address' || label === 'IPv6 address' || label === 'Internal IP') return 'ip';
   if (label === 'Email address') return 'email';
   return 'secret';
 }

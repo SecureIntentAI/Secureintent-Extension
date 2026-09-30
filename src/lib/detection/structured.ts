@@ -1,5 +1,5 @@
 import type { Detection } from './types';
-import { isPlaceholderCredentialValue, shannon } from './validators';
+import { hasFingerprintContext, isPlaceholderCredentialValue, shannon } from './validators';
 
 const KEY_NAME =
   /(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|credential|password|passwd|private[_-]?key|secret|token)(?:$|[_-])/i;
@@ -239,7 +239,11 @@ function tokenChar(ch: string | undefined): boolean {
 }
 
 /** Conservative unknown-token candidate pass for unfamiliar dotted or dashed formats. */
-export function detectUnknownTokens(text: string, maxFindings = Infinity): Detection[] {
+export function detectUnknownTokens(
+  text: string,
+  maxFindings = Infinity,
+  rejectedStructuredCandidates?: Uint8Array,
+): Detection[] {
   const findings: Detection[] = [];
   let lineStart = 0;
   for (let i = 0; i < text.length; ) {
@@ -251,6 +255,17 @@ export function detectUnknownTokens(text: string, maxFindings = Infinity): Detec
     const start = i;
     while (tokenChar(text[i])) i++;
     const value = text.slice(start, i);
+    if (rejectedStructuredCandidates) {
+      let fullyRejected = true;
+      for (let offset = start; offset < i; offset++) {
+        if (!rejectedStructuredCandidates[offset]) {
+          fullyRejected = false;
+          break;
+        }
+      }
+      if (fullyRejected) continue;
+    }
+    if (hasFingerprintContext(text, start)) continue;
     // Structured fields are handled with their field names above. Avoid
     // treating a public identifier as secret merely because it looks random.
     if (text[start - 1] === '"' || text[start - 1] === "'" || text[i] === '"' || text[i] === "'")

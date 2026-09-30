@@ -1,7 +1,14 @@
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 import { Show, useUser } from '@clerk/chrome-extension';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browser } from '#imports';
-import { ACCOUNT_URL, isAuthEnabled, isClerkSdkEnabled, TEAM_URL } from '@/lib/clerkConfig';
+import {
+  ACCOUNT_URL,
+  isAuthEnabled,
+  isClerkSdkEnabled,
+  SHADOW_DASHBOARD_URL,
+  TEAM_URL,
+} from '@/lib/clerkConfig';
 import {
   type ActiveEntitlement,
   canManageTeam,
@@ -65,12 +72,27 @@ function openTeamTab(e: { stopPropagation: () => void }) {
   browser.tabs.create({ url: TEAM_URL }).catch(() => {});
 }
 
+function openShadowDashboard() {
+  browser.tabs.create({ url: SHADOW_DASHBOARD_URL }).catch(() => {});
+}
+
 /** Team console shortcut. Admins only — a member has nothing to manage there. */
 function TeamLink({ ent }: { ent: ActiveEntitlement }) {
   if (!canManageTeam(ent)) return null;
   return (
     <button type="button" className="si-team-link" onClick={openTeamTab}>
       Manage team
+      <ChevronIcon />
+    </button>
+  );
+}
+
+/** Available to every active Business seat; policy controls remain admin-only. */
+function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
+  if (ent.plan !== 'business_pro' || !ent.org) return null;
+  return (
+    <button type="button" className="si-team-link" onClick={openShadowDashboard}>
+      Shadow AI dashboard
       <ChevronIcon />
     </button>
   );
@@ -186,6 +208,7 @@ function SignedInBar() {
         </span>
       </button>
       <TeamLink ent={ent} />
+      <ShadowDashboardLink ent={ent} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );
@@ -332,12 +355,22 @@ function FirefoxAccountBar() {
         </span>
       </button>
       <TeamLink ent={ent} />
+      <ShadowDashboardLink ent={ent} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );
 }
 
 export function AccountSection() {
+  if (SHADOW_DEMO) return (
+    <div className="si-profile-wrap">
+      <button type="button" className="si-team-link" onClick={() => {
+        browser.tabs.create({ url: new URL('shadow.html', browser.runtime.getURL('/popup.html')).href }).catch(() => {});
+      }}>
+        Live Shadow AI · local demo <ChevronIcon />
+      </button>
+    </div>
+  );
   if (isClerkSdkEnabled()) {
     // Chrome: full Clerk SDK with signed-in/out components.
     return (

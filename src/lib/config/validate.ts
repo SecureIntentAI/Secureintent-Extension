@@ -62,7 +62,10 @@ function validPolicy(v: unknown): boolean {
         rule.serviceId.length > 40 ||
         ids.has(rule.serviceId) ||
         !['sanctioned', 'recognized', 'review'].includes(rule.classification) ||
-        typeof rule.pasteBlocked !== 'boolean'
+        (rule.pasteMode !== undefined &&
+          !['normal', 'block_sensitive', 'block_all'].includes(String(rule.pasteMode))) ||
+        (rule.pasteBlocked !== undefined && typeof rule.pasteBlocked !== 'boolean') ||
+        (rule.pasteMode === undefined && typeof rule.pasteBlocked !== 'boolean')
       )
         return false;
       ids.add(rule.serviceId);
