@@ -22,7 +22,7 @@ describe('detectSecrets — known keys', () => {
   test('detects a GitHub personal access token', () => {
     const token = 'ghp_' + 'a'.repeat(36);
     const dets = detectSecrets(`token=${token}`);
-    expect(dets.find((d) => d.label === 'GitHub token')?.match).toBe(token);
+    expect(dets.find((d) => d.label === 'GitHub token')?.match).toBe(`token=${token}`);
   });
 
   test('detects a Google API key', () => {
@@ -59,7 +59,7 @@ describe('detectSecrets — known keys', () => {
   test('detects a GitHub fine-grained PAT', () => {
     const key = 'github_pat_11ABCDEFGH0123456789abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ';
     const dets = detectSecrets(`token=${key}`);
-    expect(dets.find((d) => d.label === 'GitHub fine-grained PAT')?.match).toBe(key);
+    expect(dets.find((d) => d.label === 'GitHub fine-grained PAT')?.match).toBe(`token=${key}`);
   });
 
   test('detects a GitLab PAT', () => {
@@ -326,13 +326,12 @@ describe('detectSecrets — multiple & overlap', () => {
     expect(dets[0].start).toBeLessThan(dets[1].start);
   });
 
-  test('keeps the more specific match when two patterns overlap', () => {
-    // An env line whose value is an OpenAI key: known-key should win, not duplicated.
+  test('keeps the more specific label and the full sensitive range when patterns overlap', () => {
     const key = 'sk-' + 'z'.repeat(30);
     const dets = detectSecrets(`API_KEY=${key}`);
     expect(dets).toHaveLength(1);
     expect(dets[0].type).toBe('known-key');
-    expect(dets[0].match).toBe(key);
+    expect(dets[0].match).toBe(`API_KEY=${key}`);
   });
 });
 

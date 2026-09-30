@@ -1,15 +1,13 @@
-// Behaviour pins for the paste-path performance refactor.
-//
-// Each test compares the shipped function against a copy of the ORIGINAL
-// implementation it replaced. The refactor was a complexity fix only, so any
-// difference in output here is a regression, not an improvement.
+// Behaviour pins for transformations, plus coverage invariants for detection.
+// Overlap resolution intentionally differs from the historical implementation:
+// sensitive coverage may never be discarded in favour of a more specific label.
 import { describe, expect, it } from 'vitest';
 import { GHOST_EXTRA_PATTERNS } from './ghost';
 import { detectSecrets } from './index';
-import { PATTERNS, TYPE_RANK } from './patterns';
+import { PATTERNS } from './patterns';
 import { sanitize } from './sanitize';
 import { tokenizeSecrets } from './tokenize';
-import type { Detection, SecretType } from './types';
+import type { Detection } from './types';
 
 // ---- original implementations (pre-refactor), kept verbatim as the oracle ----
 
@@ -52,45 +50,6 @@ function tokenizeOldShape(
     secrets.push(d.match);
   }
   return { text: out, secrets };
-}
-
-/** Original overlap resolution: greedy in rank order, O(n^2) membership test. */
-function resolveOld(raw: Detection[]): Detection[] {
-  const rankOf = (t: string) => TYPE_RANK[t as SecretType] ?? 0;
-  const sorted = [...raw].sort((a, b) => {
-    const rank = rankOf(b.type) - rankOf(a.type);
-    if (rank !== 0) return rank;
-    return b.end - b.start - (a.end - a.start);
-  });
-  const kept: Detection[] = [];
-  for (const det of sorted) {
-    if (!kept.some((k) => k.start < det.end && det.start < k.end)) kept.push(det);
-  }
-  return kept.sort((a, b) => a.start - b.start);
-}
-
-/** Collect raw matches exactly as detectSecrets does, before overlap resolution. */
-function rawMatches(text: string, patterns: typeof PATTERNS): Detection[] {
-  const raw: Detection[] = [];
-  for (const pattern of patterns) {
-    const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
-    for (;;) {
-      const m = regex.exec(text);
-      if (m === null) break;
-      if (m[0].length === 0) {
-        regex.lastIndex++;
-        continue;
-      }
-      raw.push({
-        type: pattern.type,
-        label: pattern.label,
-        match: m[0],
-        start: m.index,
-        end: m.index + m[0].length,
-      });
-    }
-  }
-  return raw;
 }
 
 // ---- deterministic pseudo-random corpus (no dependency on Math.random) ----
@@ -180,7 +139,7 @@ describe('tokenizeSecrets matches the original implementation', () => {
   });
 });
 
-describe('overlap resolution matches the original implementation', () => {
+describe('overlap resolution preserves the union of independently detected ranges', () => {
   const cases: Array<[string, string, typeof PATTERNS]> = [
     ['log corpus', corpus(21, 300), ghostPatterns],
     [
@@ -205,16 +164,18 @@ describe('overlap resolution matches the original implementation', () => {
   ];
 
   for (const [name, text, patterns] of cases) {
-    it(`identical kept set: ${name}`, () => {
-      const expected = resolveOld(rawMatches(text, patterns));
+    it(`complete sensitive coverage: ${name}`, () => {
+      const independent = patterns.flatMap((pattern) => detectSecrets(text, [pattern]));
       const actual = detectSecrets(text, patterns);
-      // detectSecrets applies validators/inUrl filtering that the oracle does
-      // not, so compare only where the raw set survives those filters.
-      const actualKeys = actual.map((d) => `${d.start}:${d.end}:${d.type}:${d.label}`);
-      const expectedKeys = expected
-        .filter((e) => actual.some((a) => a.start === e.start && a.end === e.end))
-        .map((d) => `${d.start}:${d.end}:${d.type}:${d.label}`);
-      expect(actualKeys).toEqual(expectedKeys);
+      const coverage = (detections: Detection[]) => {
+        const offsets = new Set<number>();
+        for (const d of detections) {
+          expect(d.match).toBe(text.slice(d.start, d.end));
+          for (let i = d.start; i < d.end; i++) offsets.add(i);
+        }
+        return offsets;
+      };
+      expect(coverage(actual)).toEqual(coverage(independent));
       // Kept detections never overlap each other.
       for (let i = 1; i < actual.length; i++) {
         expect(actual[i].start).toBeGreaterThanOrEqual(actual[i - 1].end);
