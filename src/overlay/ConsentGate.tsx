@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Logo } from '@/components/Logo';
 import { PRIVACY_URL, TOS_URL } from '@/lib/consent';
+import { useDialogFocus } from './useDialogFocus';
 
 export interface ConsentGateProps {
   /** Accept the current Terms & Privacy. */
@@ -21,6 +22,7 @@ export interface ConsentGateProps {
  * a silently swallowed paste is what made this gate feel broken.
  */
 export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
+  const focusRef = useDialogFocus();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onCancel();
@@ -30,7 +32,7 @@ export function ConsentGate({ onAgree, onCancel }: ConsentGateProps) {
   }, [onCancel]);
 
   return (
-    <div className="si-scrim" onClick={onCancel}>
+    <div ref={focusRef} className="si-scrim" onClick={onCancel}>
       <div
         className="si-hud si-consent"
         role="alertdialog"

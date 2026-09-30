@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
-import { type BundlePolicy, DEFAULT_BUNDLE, saveBundle } from '@/lib/config';
+import { type BundlePolicy, configItem, DEFAULT_BUNDLE, saveBundle } from '@/lib/config';
 import { acceptTerms, consentItem } from '@/lib/consent';
+import { getAnonymizeStatus } from '@/lib/quota';
 import type { OverlayAction } from '@/overlay/Overlay';
 import * as telemetryService from '@/services/telemetryService';
 import { getBlockedCount, setEnabled } from '@/settings';
@@ -60,13 +61,20 @@ function composedPathFrom(target: EventTarget | null): EventTarget[] {
 
 interface FakeCtx {
   addEventListener: (target: unknown, type: string, cb: (e: unknown) => unknown) => void;
+  onInvalidated: (callback: () => void) => void;
 }
 
 function setup() {
   const handlers: Record<string, (e: unknown) => unknown> = {};
+  const targets: unknown[] = [];
+  let invalidate = () => {};
   const ctx: FakeCtx = {
-    addEventListener: (_t, type, cb) => {
+    addEventListener: (target, type, cb) => {
+      targets.push(target);
       handlers[type] = cb;
+    },
+    onInvalidated: (callback) => {
+      invalidate = callback;
     },
   };
   const input = document.createElement('div');
@@ -84,6 +92,8 @@ function setup() {
 
   return {
     input,
+    targets,
+    invalidate: () => invalidate(),
     start: () => createPasteGuard(ctx as never, { name: 'ChatGPT', siteKey: 'chatgpt' }),
     firePaste: (e: ReturnType<typeof makeEvent>) => handlers.paste?.(e),
     makeEvent,
@@ -615,6 +625,150 @@ describe('createPasteGuard', () => {
 
     // Fail-open: execCommand must have been called to re-insert the original text
     expect(document.execCommand).toHaveBeenCalledWith('insertText', false, text);
+  });
+
+  test('registers window capture synchronously and holds an early paste until local config loads', async () => {
+    let release!: (bundle: typeof DEFAULT_BUNDLE) => void;
+    const pending = new Promise<typeof DEFAULT_BUNDLE>((resolve) => {
+      release = resolve;
+    });
+    const read = vi.spyOn(configItem, 'getValue').mockReturnValueOnce(pending);
+    try {
+      const t = setup();
+      const boot = t.start();
+      expect(t.targets).toEqual([window]);
+      const event = t.makeEvent(SECRET);
+      const paste = t.firePaste(event);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(event.stopImmediatePropagation).toHaveBeenCalled();
+      expect(mountOverlayMock).not.toHaveBeenCalled();
+      release(DEFAULT_BUNDLE);
+      await boot;
+      await paste;
+      expect(mountOverlayMock).toHaveBeenCalledTimes(1);
+      expect(document.execCommand).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test('replays a held clean startup paste exactly once', async () => {
+    const t = setup();
+    const boot = t.start();
+    const paste = t.firePaste(t.makeEvent('ordinary text'));
+    await boot;
+    await paste;
+    expect(document.execCommand).toHaveBeenCalledExactlyOnceWith(
+      'insertText',
+      false,
+      'ordinary text',
+    );
+    expect(mountOverlayMock).not.toHaveBeenCalled();
+  });
+
+  test('blocks repeated pastes while quota is pending and rejects stale action callbacks', async () => {
+    let release!: (status: Awaited<ReturnType<typeof getAnonymizeStatus>>) => void;
+    vi.mocked(getAnonymizeStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const t = setup();
+    await t.start();
+    const first = t.firePaste(t.makeEvent(SECRET));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const second = t.makeEvent(SECRET);
+    await t.firePaste(second);
+    expect(second.preventDefault).toHaveBeenCalled();
+    expect(second.stopImmediatePropagation).toHaveBeenCalled();
+    expect(document.execCommand).not.toHaveBeenCalled();
+    release({ used: 0, remaining: 10, limit: 10, unlimited: false });
+    await first;
+    expect(mountOverlayMock).toHaveBeenCalledTimes(1);
+    const action = lastOnAction();
+    action('cancel');
+    action('paste');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    await t.firePaste(t.makeEvent(SECRET));
+    lastOnAction()('paste');
+    expect(document.execCommand).toHaveBeenCalledTimes(1);
+  });
+
+  test('blocks a repeated paste even when its target is a dialog button', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const button = document.createElement('button');
+    document.body.append(button);
+    const repeat = t.makeEvent(SECRET, button);
+    await t.firePaste(repeat);
+    expect(repeat.preventDefault).toHaveBeenCalled();
+    expect(repeat.stopImmediatePropagation).toHaveBeenCalled();
+    expect(mountOverlayMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('invalidating the content script removes its warning and rejects later actions', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const action = lastOnAction();
+    const handle = await mountOverlayMock.mock.results[0].value;
+    t.invalidate();
+    expect(handle.remove).toHaveBeenCalledTimes(1);
+    action('paste');
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  test('invalidating during overlay mounting discards the late result', async () => {
+    let release!: (handle: { remove: () => void }) => void;
+    mountOverlayMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const t = setup();
+    await t.start();
+    const paste = t.firePaste(t.makeEvent(SECRET));
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    t.invalidate();
+    const remove = vi.fn();
+    release({ remove });
+    await paste;
+    expect(remove).toHaveBeenCalledOnce();
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  test('an insertion error does not leave subsequent pastes unguarded', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    vi.mocked(document.execCommand).mockImplementationOnce(() => {
+      throw new Error('editor failed');
+    });
+    lastOnAction()('paste');
+    const next = t.makeEvent(SECRET);
+    await t.firePaste(next);
+    expect(next.preventDefault).toHaveBeenCalled();
+    expect(mountOverlayMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('restores the original selection before an approved insertion', async () => {
+    const t = setup();
+    t.input.remove();
+    const input = document.createElement('textarea');
+    input.id = 'prompt-textarea';
+    input.value = 'before replace after';
+    document.body.append(input);
+    input.focus();
+    input.setSelectionRange(7, 14);
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET, input));
+    input.setSelectionRange(0, input.value.length); // editor focus side effect
+    lastOnAction()('paste');
+    expect(input.selectionStart).toBe(7);
+    expect(input.selectionEnd).toBe(14);
   });
 });
 
