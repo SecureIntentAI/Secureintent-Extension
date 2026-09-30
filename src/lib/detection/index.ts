@@ -29,8 +29,9 @@ function inUrl(text: string, start: number, end: number): boolean {
 
 /**
  * Scan text for secrets using the pattern catalog. Pure: no DOM, no async.
- * Overlapping matches are resolved by specificity (private-key > known-key >
- * env-credential, then longer match wins). Returns detections sorted by start.
+ * Overlapping matches retain their complete combined range. Specificity chooses
+ * the display label, never which sensitive characters may survive redaction.
+ * Returns non-overlapping detections sorted by start.
  */
 export function detectSecrets(text: string, patterns: Pattern[] = PATTERNS): Detection[] {
   const raw: Detection[] = [];
@@ -64,7 +65,8 @@ export function detectSecrets(text: string, patterns: Pattern[] = PATTERNS): Det
     }
   }
 
-  // Resolve overlaps: prefer higher rank, then longer match.
+  // Rank the original matches before merging: the group's expanded length must
+  // not influence which original finding supplies its label/type/provenance.
   //
   // A type this build doesn't know ranks lowest rather than producing NaN. The
   // bundle validator accepts unfamiliar types so a new one never invalidates a
@@ -76,25 +78,33 @@ export function detectSecrets(text: string, patterns: Pattern[] = PATTERNS): Det
     return b.end - b.start - (a.end - a.start);
   });
 
-  // Greedy in that priority order, but the "does this overlap anything kept so
-  // far?" test is a claimed-offsets bitmap rather than a scan of everything kept.
-  // The old `kept.some(overlaps)` was quadratic: on a 2MB log producing 40k
-  // findings it accounted for 1447ms of a 1481ms detection pass, blocking the
-  // paste handler and freezing the tab before the warning could even render.
-  const claimed = new Uint8Array(text.length);
-  const kept: Detection[] = [];
-  for (const det of raw) {
-    let free = true;
-    for (let i = det.start; i < det.end; i++) {
-      if (claimed[i]) {
-        free = false;
-        break;
-      }
-    }
-    if (!free) continue;
-    for (let i = det.start; i < det.end; i++) claimed[i] = 1;
-    kept.push(det);
-  }
+  const priority = new Map(raw.map((d, i) => [d, i]));
+  raw.sort((a, b) => a.start - b.start);
 
-  return kept.sort((a, b) => a.start - b.start);
+  // A broad credential assignment can cover a known key AND another password.
+  // Discarding it just because the key ranks higher leaves that password exposed.
+  // Merge the union of each overlapping group, including transitive overlaps.
+  // Sorting + a single sweep stays O(n log n), including large log dumps.
+  const kept: Detection[] = [];
+  let group: { start: number; end: number; primary: Detection } | undefined;
+  const flush = () => {
+    if (!group) return;
+    kept.push({
+      ...group.primary,
+      start: group.start,
+      end: group.end,
+      match: text.slice(group.start, group.end),
+    });
+  };
+  for (const det of raw) {
+    if (!group || det.start >= group.end) {
+      flush();
+      group = { start: det.start, end: det.end, primary: det };
+    } else {
+      group.end = Math.max(group.end, det.end);
+      if ((priority.get(det) ?? 0) < (priority.get(group.primary) ?? 0)) group.primary = det;
+    }
+  }
+  flush();
+  return kept;
 }
