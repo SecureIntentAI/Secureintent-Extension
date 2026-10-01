@@ -94,7 +94,14 @@ must implement this protocol before the new extension can pair:
 
 Use high-entropy pairing tokens, fresh nonces, short handshake deadlines and
 single-use per-connection challenges. No fallback sends the token itself.
-The desktop implementation is outside this repository and was not changed here.
+
+The token reaches the extension over native messaging, not by hand: the desktop
+registers the host `ai.secureintent.desktop` for this extension's ids only and
+answers `{type:"get_pairing"}` with `{type:"pairing", token, enabled, ports}`.
+The browser enforces the allow-list, so a web page or another extension cannot
+ask. The token is held in `storage.session` only. `handled` frames carry
+HMAC-SHA256(token, `secureintent-bridge-v2/handled/<sha256hex(paste)>`) as `mac`;
+the unkeyed FNV `hash` is no longer sent.
 
 ## Release checks
 

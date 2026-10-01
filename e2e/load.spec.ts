@@ -11,7 +11,7 @@ test('1,000 runtime sessions complete in the real Chromium worker host', async (
       sendMessage(message: unknown): Promise<{ ok: boolean }>;
       connect(options: { name: string }): {
         postMessage(message: unknown): void; disconnect(): void;
-        onMessage: { addListener(fn: (reply: { ok: boolean; result?: { total: number; handledHash: string }; error?: string }) => void): void };
+        onMessage: { addListener(fn: (reply: { ok: boolean; result?: { total: number; handledDigest: string }; error?: string }) => void): void };
         onDisconnect: { addListener(fn: () => void): void };
       };
     } } }).chrome.runtime;

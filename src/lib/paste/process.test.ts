@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { contentHash } from '../bridge/hash';
+import { contentDigest } from '../bridge/hash';
 import { detectSecrets, GHOST_EXTRA_PATTERNS } from '../detection';
 import { PATTERNS } from '../detection/patterns';
 import { sanitize } from '../detection/sanitize';
@@ -14,29 +14,29 @@ const patterns = [...PATTERNS, ...GHOST_EXTRA_PATTERNS].map(({ regex, ...pattern
 }));
 const SECRET = `sk-${'a'.repeat(30)}`;
 
-test('worker computation preserves complete scan, hash and sanitization results', () => {
+test('worker computation preserves complete scan, hash and sanitization results', async () => {
   const text = `hello ${SECRET} 10.0.0.1`;
   const compute = createPasteComputation();
-  const scan = compute({
+  const scan = (await compute({
     id: 1,
     operation: 'scan',
     input: { text, patterns, summary: false },
-  }) as ScanResult;
+  })) as ScanResult;
   const expected = detectSecrets(text, [...PATTERNS, ...GHOST_EXTRA_PATTERNS]);
   expect(scan.detections).toEqual(expected);
   expect(scan.total).toBe(expected.length);
-  expect(scan.handledHash).toBe(contentHash(text).toString());
+  expect(scan.handledDigest).toBe(await contentDigest(text));
   expect(compute({ id: 2, operation: 'sanitize', input: null })).toBe(sanitize(text, expected));
 });
 
-test('preview limits never limit the findings transformed', () => {
+test('preview limits never limit the findings transformed', async () => {
   const text = `${SECRET}\n`.repeat(MAX_PREVIEW_FINDINGS + 20);
   const compute = createPasteComputation();
-  const scan = compute({
+  const scan = (await compute({
     id: 1,
     operation: 'scan',
     input: { text, patterns, summary: false },
-  }) as ScanResult;
+  })) as ScanResult;
   expect(scan.total).toBe(MAX_PREVIEW_FINDINGS + 20);
   expect(scan.detections).toHaveLength(MAX_PREVIEW_FINDINGS);
   const tokenized = compute({ id: 2, operation: 'tokenize', input: null }) as TokenizeResult;
@@ -44,14 +44,14 @@ test('preview limits never limit the findings transformed', () => {
   expect(tokenized.text.match(/⟦SI:/g)).toHaveLength(MAX_PREVIEW_FINDINGS + 20);
 });
 
-test('large log response stays compact while all findings are sanitized', () => {
+test('large log response stays compact while all findings are sanitized', async () => {
   const text = `${SECRET}\n`.repeat(20_000);
   const compute = createPasteComputation();
-  const scan = compute({
+  const scan = (await compute({
     id: 1,
     operation: 'scan',
     input: { text, patterns, summary: true },
-  }) as ScanResult;
+  })) as ScanResult;
   expect(scan.detections).toEqual([]);
   expect(scan.summary?.total).toBe(20_000);
   expect(JSON.stringify(scan).length).toBeLessThan(1000);

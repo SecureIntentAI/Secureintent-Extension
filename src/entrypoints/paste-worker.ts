@@ -9,14 +9,14 @@ export default defineUnlistedScript(() => {
     ) => void;
     postMessage(reply: PasteReply): void;
   };
-  scope.onmessage = ({ data }) => {
+  scope.onmessage = async ({ data }) => {
     try {
       const compute = createPasteComputation();
       if (data.operation !== 'scan') {
         if (!data.scan) throw new Error('Missing scan context');
         compute({ id: data.id, operation: 'scan', input: data.scan });
       }
-      scope.postMessage({ id: data.id, ok: true, result: compute(data) });
+      scope.postMessage({ id: data.id, ok: true, result: await compute(data) });
     } catch {
       // Never include pasted text, matches, or exception details in IPC/logs.
       scope.postMessage({

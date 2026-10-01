@@ -1,20 +1,23 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { bridgeTokenItem } from '@/settings';
 import { bridgeProof } from './auth';
-import { sendBrowserUrl, sendHandledHash } from './client';
+import { sendBrowserUrl, sendHandled } from './client';
+import { contentDigest, dedupMac } from './hash';
+import { NATIVE_HOST } from './pairing';
 
-const TOKEN = 'pairing-token';
+const TOKEN = 'pairing-token-0123456789';
 
 /**
  * A WebSocket stand-in driven by a per-port script, so a test can say "8137 is
- * squatted, 8139 is the agent" and check we end up on 8139. It also checks the
- * token, because refusing a bad one is behaviour we depend on.
+ * squatted, 8139 is the agent" and check we end up on 8139. It checks the proofs
+ * against `agentToken`, the token the agent currently holds, because refusing a
+ * bad one is behaviour we depend on.
  */
 type Behaviour = 'agent' | 'dead' | 'squatter';
 let behaviour: Record<number, Behaviour> = {};
 let opened: number[] = [];
 let sent: Array<{ port: number; raw: string }> = [];
+let agentToken = TOKEN;
 
 class FakeSocket {
   onopen: (() => void) | null = null;
@@ -36,21 +39,22 @@ class FakeSocket {
 
   async send(raw: string) {
     const frame = JSON.parse(raw);
-    if (raw.includes(TOKEN)) throw new Error('Pairing key disclosed');
+    if (raw.includes(agentToken) || raw.includes(TOKEN)) throw new Error('Pairing key disclosed');
     if (frame.type === 'hello_v2') {
       this.nonce = frame.nonce;
       if (behaviour[this.port] === 'squatter') {
         this.onmessage?.({ data: JSON.stringify({ type: 'welcome', ok: true }) });
         return;
       }
-      const proof = await bridgeProof(TOKEN, 'server', this.nonce, this.serverNonce);
+      const proof = await bridgeProof(agentToken, 'server', this.nonce, this.serverNonce);
       this.onmessage?.({
         data: JSON.stringify({ type: 'challenge_v2', nonce: this.serverNonce, proof }),
       });
       return;
     }
     if (frame.type === 'authenticate_v2') {
-      const ok = frame.proof === (await bridgeProof(TOKEN, 'client', this.nonce, this.serverNonce));
+      const ok =
+        frame.proof === (await bridgeProof(agentToken, 'client', this.nonce, this.serverNonce));
       this.onmessage?.({ data: JSON.stringify({ type: 'welcome_v2', ok }) });
       return;
     }
@@ -60,35 +64,82 @@ class FakeSocket {
   close() {}
 }
 
+/** What the desktop's native host says. `null` host: no desktop app installed. */
+let host: { token: string | null } | null = { token: TOKEN };
+const nativeCalls: unknown[] = [];
+
 beforeEach(async () => {
   fakeBrowser.reset();
   behaviour = {};
   opened = [];
   sent = [];
+  agentToken = TOKEN;
+  host = { token: TOKEN };
+  nativeCalls.length = 0;
   vi.stubGlobal('WebSocket', FakeSocket as unknown as typeof WebSocket);
-  await bridgeTokenItem.setValue(TOKEN);
+  fakeBrowser.runtime.sendNativeMessage = vi.fn(async (name: string, message: unknown) => {
+    nativeCalls.push(message);
+    if (name !== NATIVE_HOST || host === null) {
+      throw new Error('Specified native messaging host not found.');
+    }
+    return { type: 'pairing', v: 1, token: host.token, ports: [8137, 8138, 8139, 8140, 8141] };
+  }) as unknown as typeof fakeBrowser.runtime.sendNativeMessage;
 });
 
 describe('pairing', () => {
+  test('pairs using the token the desktop app hands over, with nothing typed in', async () => {
+    behaviour = { 8137: 'agent' };
+    expect(await sendBrowserUrl('localhost', 3000)).toBe(true);
+    expect(nativeCalls).toEqual([{ type: 'get_pairing', v: 1 }]);
+  });
+
   test('a port squatter receives neither the token nor activity', async () => {
     behaviour = { 8137: 'squatter', 8138: 'agent' };
     expect(await sendBrowserUrl('localhost', 3000)).toBe(true);
     expect(sent.map((s) => s.port)).toEqual([8138]);
   });
-  test('says nothing at all until a token is saved', async () => {
-    await bridgeTokenItem.setValue(null);
+
+  test('with no desktop app, no local port is ever opened', async () => {
+    host = null;
     behaviour = { 8137: 'agent' };
     expect(await sendBrowserUrl('localhost', 3000)).toBe(false);
-    // Not merely unsent — no socket is opened, so an unpaired browser never
-    // touches a local port.
+    // Not merely unsent — no socket is opened, so a browser without the desktop
+    // app never touches a local port.
     expect(opened).toEqual([]);
   });
 
-  test('a token the agent rejects sends nothing', async () => {
-    await bridgeTokenItem.setValue('wrong');
+  test('a desktop app that has never run (no token yet) is treated the same', async () => {
+    host = { token: null };
     behaviour = { 8137: 'agent' };
     expect(await sendBrowserUrl('localhost', 3000)).toBe(false);
+    expect(opened).toEqual([]);
+  });
+
+  test('a missing desktop app is not asked again on every report', async () => {
+    host = null;
+    await sendBrowserUrl('localhost', 3000);
+    await sendBrowserUrl('localhost', 3001);
+    await sendHandled(await contentDigest('x'));
+    expect(nativeCalls).toHaveLength(1);
+  });
+
+  test('a token the agent no longer accepts is refreshed from the desktop once', async () => {
+    behaviour = { 8137: 'agent' };
+    expect(await sendBrowserUrl('localhost', 3000)).toBe(true);
+    // Reinstalled: the agent and its host now hold a new token.
+    agentToken = 'reinstalled-token-9876543210';
+    host = { token: agentToken };
+    expect(await sendBrowserUrl('localhost', 4000)).toBe(true);
+    expect(nativeCalls).toHaveLength(2);
+    expect(sent.at(-1)?.raw).toContain('localhost:4000');
+  });
+
+  test('a refused token that the desktop still hands out is not retried forever', async () => {
+    behaviour = { 8137: 'agent' };
+    agentToken = 'something-else-entirely-000';
+    expect(await sendBrowserUrl('localhost', 3000)).toBe(false);
     expect(sent).toEqual([]);
+    expect(nativeCalls).toHaveLength(2); // the first lookup, then one refresh
   });
 
   test('walks past a dead port to the agent behind it', async () => {
@@ -98,7 +149,7 @@ describe('pairing', () => {
     expect(sent.map((s) => s.port)).toEqual([8139]);
   });
 
-  test('no agent at all is a quiet false, not a throw', async () => {
+  test('no agent running is a quiet false, not a throw', async () => {
     await expect(sendBrowserUrl('localhost', 3000)).resolves.toBe(false);
   });
 
@@ -162,23 +213,28 @@ describe('handled', () => {
     behaviour = { 8137: 'agent' };
   });
 
-  test('the u64 reaches the wire exactly, not rounded through a JS number', async () => {
-    // 16654208175385433931 is contentHash('abc'). Through Number it becomes
-    // ...434000, the desktop looks up a hash we never sent, and every dedup
-    // misses in silence. This is the assertion that catches that.
-    await sendHandledHash('16654208175385433931');
-    expect(sent[0].raw).toContain('"hash":16654208175385433931');
-    expect(sent[0].raw).not.toContain('16654208175385434000');
+  test('sends the token-keyed MAC, never the digest or the value', async () => {
+    const digest = await contentDigest('AKIAIOSFODNN7EXAMPLE');
+    expect(await sendHandled(digest)).toBe(true);
+    const frame = JSON.parse(sent[0].raw);
+    expect(frame).toEqual({ type: 'handled', mac: await dedupMac(TOKEN, digest), ttl_ms: 5000 });
+    expect(sent[0].raw).not.toContain(digest);
+    expect(sent[0].raw).not.toContain('AKIA');
+    expect(frame).not.toHaveProperty('hash');
   });
 
-  test('carries a ttl the desktop can honour', async () => {
-    await sendHandledHash('123');
-    expect(JSON.parse(sent[0].raw)).toEqual({ type: 'handled', hash: 123, ttl_ms: 5000 });
+  test('after a token refresh the MAC is keyed with the new token', async () => {
+    const digest = await contentDigest('AKIAIOSFODNN7EXAMPLE');
+    await sendBrowserUrl('localhost', 1); // pairs with TOKEN, which is now cached
+    agentToken = 'reinstalled-token-9876543210';
+    host = { token: agentToken };
+    expect(await sendHandled(digest)).toBe(true);
+    expect(JSON.parse(sent.at(-1)?.raw ?? '{}').mac).toBe(await dedupMac(agentToken, digest));
   });
 
-  test('anything that is not a plain decimal is refused', async () => {
-    for (const bad of ['', 'abc', '1e5', '-1', '12.5', '1; DROP TABLE']) {
-      expect(await sendHandledHash(bad)).toBe(false);
+  test('anything that is not a 64-char lowercase hex digest is refused', async () => {
+    for (const bad of ['', 'abc', '16654208175385433931', 'Z'.repeat(64), `${'a'.repeat(63)}`]) {
+      expect(await sendHandled(bad)).toBe(false);
     }
     expect(sent).toEqual([]);
   });

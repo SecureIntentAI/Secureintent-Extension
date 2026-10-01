@@ -857,12 +857,13 @@ export async function createPasteGuard(
                 }
                 notifyAction({ ...featureCtx, action }); // pro: audit log / team report
                 // We showed a warning for this copy, so the desktop app — if the
-                // person runs it and has paired it — should not raise its own for
-                // the same one. Only the locally computed hash travels to that
-                // bridge; pasted text never travels to the desktop or a server.
-                // The background drops the hash when the bridge is off.
+                // person runs it — should not raise its own for the same one. Only
+                // the digest the worker computed leaves this frame, and the
+                // background keys it with the pairing token before anything goes
+                // on the wire; pasted text never travels to the desktop or a
+                // server. With no desktop app, the background drops it.
                 browser.runtime
-                  .sendMessage({ type: 'si-bridge-handled', hash: scan.handledHash })
+                  .sendMessage({ type: 'si-bridge-handled', digest: scan.handledDigest })
                   .catch(() => {});
                 if (!ghostMode && action !== 'sanitize' && fingerprintsPromise) {
                   // A refused "paste" inserted nothing, so it is reported as
