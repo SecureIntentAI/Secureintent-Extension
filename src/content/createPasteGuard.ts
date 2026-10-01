@@ -213,6 +213,14 @@ function claimShadowVisit(): boolean {
   return true;
 }
 
+function isSecureIntentAuthenticationPage(): boolean {
+  const host = location.hostname.toLowerCase();
+  const ownHost = host === 'secureintent.ai' || host === 'www.secureintent.ai';
+  const localPilot = host === '127.0.0.1' || host === 'localhost';
+  if (!ownHost && !localPilot) return false;
+  return ['/account.html', '/business_promo.html'].includes(location.pathname);
+}
+
 export async function createPasteGuard(
   ctx: ContentScriptContext,
   config: SiteConfig,
@@ -241,10 +249,14 @@ export async function createPasteGuard(
     return { input, path, text, selection: captureSelection(input) };
   };
   const routePaste = (event: Event, text: string) => {
+    // SecureIntent's own Clerk forms must remain usable while the extension is
+    // active. Email addresses and recovery codes are expected authentication
+    // input here; intercepting them can prevent the user from signing in to the
+    // product that owns the guard.
+    if (isSecureIntentAuthenticationPage()) return;
     if (processPaste) {
       if (isFallback && dedicatedActive()) return;
-      void processPaste(event);
-      return;
+      return processPaste(event);
     }
     const captured = captureEarly(event, text);
     if (captured) startupQueue.push(captured);
@@ -256,7 +268,7 @@ export async function createPasteGuard(
       const e = event as ClipboardEvent;
       if (!e.isTrusted || (isFallback && dedicatedActive())) return;
       const text = readClipboardText(e.clipboardData);
-      if (text) routePaste(event, text);
+      if (text) return routePaste(event, text);
     },
     { capture: true },
   );
@@ -409,8 +421,15 @@ export async function createPasteGuard(
     siError(config.name, 'entitlement cache unavailable; using free features', error);
     return () => {};
   });
-  const stopIdentity = entitlementItem.watch(() => {
-    if (active) finish(active);
+  const accessScope = (value: Awaited<ReturnType<typeof entitlementItem.getValue>>) => {
+    const blob = value?.blob;
+    return blob ? JSON.stringify([blob.clerkUserId,blob.org?.id,blob.plan,blob.pro,blob.features]) : null;
+  };
+  let previousAccess = accessScope(await entitlementItem.getValue());
+  const stopIdentity = entitlementItem.watch(value => {
+    const nextAccess = accessScope(value);
+    if (nextAccess !== previousAccess && active) finish(active);
+    previousAccess = nextAccess;
   });
   ctx.onInvalidated?.(() => {
     stopConsent();
@@ -936,8 +955,16 @@ export async function createPasteGuard(
     _sender: unknown,
     respond: (value: unknown) => void,
   ) => {
+    if ((message as {type?:string})?.type === 'si-policy-probe' && !(isFallback && dedicatedActive())) {
+      void browser.runtime.sendMessage({
+        type:'si-policy-receipt', nonce:(message as {nonce?:string}).nonce,
+        orgId:bundle.policy?.orgId ?? null, version:bundle.policyVersion ?? 0,
+        active:enabled && consented && !bundle.killSwitch,
+      }).catch(() => {});
+      return false;
+    }
     if (
-      (message as { type?: string })?.type !== 'si-protection-status' ||
+      (message as { type?: string })?.type !== 'si-protection-status'  ||
       (isFallback && dedicatedActive())
     )
       return false;

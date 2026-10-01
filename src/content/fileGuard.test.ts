@@ -103,3 +103,14 @@ test('aggregate size limit rejects a large multi-file selection', async () => {
   expect(await checkFiles(files, 'chatgpt.com')).toMatchObject({ kind: 'error' });
   for (const upload of files) expect(upload.text).not.toHaveBeenCalled();
 });
+
+test('Shadow destination rules apply to file uploads as well as pastes',async()=>{
+  const rules = {blockInsteadOfWarn:false,requireSessionLock:false,blockedSites:[],aiServices:[{serviceId:'chatgpt',classification:'review' as const,pasteMode:'block_all' as const}]};
+  vi.mocked(getActiveBundle).mockResolvedValue({...DEFAULT_BUNDLE,policy:rules});
+  const clean=file('notes.txt','ordinary text');
+  expect(await checkFiles([clean],'chatgpt.com')).toMatchObject({kind:'blocked'});
+  expect(clean.text).not.toHaveBeenCalled();
+  vi.mocked(getActiveBundle).mockResolvedValue({...DEFAULT_BUNDLE,policy:{...rules,aiServices:[{...rules.aiServices[0],pasteMode:'block_sensitive'}]}});
+  expect(await checkFiles([clean],'chatgpt.com')).toMatchObject({kind:'clean'});
+  expect(await checkFiles([file('notes.txt','contact=alice@example.com')],'chatgpt.com')).toMatchObject({kind:'blocked',count:1});
+});

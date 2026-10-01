@@ -26,6 +26,8 @@ export function shouldAcceptBundle(
 ): boolean {
   if (!authenticated && (current?.policy || incoming.policy)) return false;
   if (!current) return true;
+  // Global catalogue updates must never roll a same-organization policy backwards.
+  if (orgId(current) && orgId(current) === orgId(incoming) && revision(incoming) < revision(current)) return false;
   if (incoming.version > current.version) return true;
   if (incoming.version < current.version) return false;
   if (!authenticated) return false;

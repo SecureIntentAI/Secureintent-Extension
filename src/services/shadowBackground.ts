@@ -172,12 +172,12 @@ async function flush(): Promise<void> {
     const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
     const claims = JSON.parse(atob(part));
     const org = claims.org_id ?? claims.o?.id;
-    if (typeof claims.sub !== 'string' || typeof org !== 'string') {
+    if (typeof claims.sub !== 'string' || (org != null && typeof org !== 'string')) {
       await save({ ...state, error: 'Shadow upload requires an organisation-bound session.' });
       return;
     }
     if (
-      JSON.stringify([claims.sub, org]) !== who.owner ||
+      JSON.stringify([claims.sub, org ?? who.orgId]) !== who.owner ||
       !(await isConsentAccepted()) ||
       (await seat()).owner !== who.owner
     ) {
@@ -190,7 +190,7 @@ async function flush(): Promise<void> {
   }
   const batch = queue.slice(0, 25);
   try {
-    const ids = await sendShadowEvents(token, batch);
+    const ids = await sendShadowEvents(token, batch, who.orgId!);
     await save({
       ...state,
       queue: queue.filter((event) => !ids.includes(event.eventId)),

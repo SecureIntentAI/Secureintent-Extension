@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
+import { githubTokenChecksum } from '@/lib/detection/validators';
 import { type BundlePolicy, DEFAULT_BUNDLE, saveBundle } from '@/lib/config';
 import { acceptTerms, consentItem } from '@/lib/consent';
 import { createPasteProcessor } from '@/lib/paste/client';
@@ -157,6 +158,21 @@ describe('createPasteGuard', () => {
   });
   afterEach(() => document.body.replaceChildren());
 
+  test('does not intercept SecureIntent Business authentication fields', async () => {
+    const previous = location.href;
+    history.replaceState({}, '', '/business_promo.html');
+    try {
+      const t = setup();
+      await t.start();
+      const event = t.makeEvent('kaushik.raj@secureintent.ai');
+      await t.firePaste(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mountOverlayMock).not.toHaveBeenCalled();
+    } finally {
+      history.replaceState({}, '', new URL(previous).pathname);
+    }
+  });
+
   test('live policy replacement cancels an old decision and blocks the next clean paste', async () => {
     const t = setup();
     await t.start();
@@ -175,7 +191,7 @@ describe('createPasteGuard', () => {
     await oldAction('paste');
     expect(document.execCommand).not.toHaveBeenCalled();
     await t.firePaste(t.makeEvent('ordinary safe message'));
-    expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({ host: location.hostname });
+    expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
     expect(document.execCommand).not.toHaveBeenCalled();
   });
 
@@ -268,7 +284,7 @@ describe('createPasteGuard', () => {
     expect(mountOverlayMock.mock.calls[0][1].detections).toHaveLength(1);
   });
 
-  test('worker startup failure stays blocked and dismissal allows a fresh checked paste', async () => {
+  test('worker startup failure stays blocked and a fresh paste is checked', async () => {
     vi.mocked(createPasteProcessor).mockRejectedValueOnce(new Error('worker unavailable'));
     const t = setup();
     await t.start();
@@ -277,8 +293,7 @@ describe('createPasteGuard', () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
     expect(mountOverlayMock).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)![1]).toBe('error');
-    mountPasteStatusMock.mock.calls.at(-1)![2]();
+    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(1);
   });
@@ -297,7 +312,7 @@ describe('createPasteGuard', () => {
   test('records the number of secrets intercepted', async () => {
     const t = setup();
     await t.start();
-    await t.firePaste(t.makeEvent(`${SECRET} and ${'ghp_' + 'b'.repeat(36)}`));
+    await t.firePaste(t.makeEvent(`${SECRET} and ${'gh' + 'p_' + 'b'.repeat(30) + githubTokenChecksum('b'.repeat(30))}`));
 
     // recordBlocked is fire-and-forget, so poll for the write to land.
     await vi.waitFor(async () => expect(await getBlockedCount()).toBe(2));
@@ -377,7 +392,9 @@ describe('createPasteGuard', () => {
     vi.mocked(consumeAnonymize).mockResolvedValueOnce(false);
     await lastOnAction()('redact');
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)![1]).toBe('error');
+    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    await t.firePaste(t.makeEvent(SECRET));
+    expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
 
   test('a failed or expired transformation worker does not consume allowance', async () => {
@@ -390,7 +407,9 @@ describe('createPasteGuard', () => {
     await lastOnAction()('redact');
     expect(consumeAnonymize).not.toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)![1]).toBe('error');
+    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    await t.firePaste(t.makeEvent(SECRET));
+    expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
 
   test('cancelling while the action status mounts does not consume quota', async () => {
@@ -935,11 +954,7 @@ describe('createPasteGuard', () => {
     expect(e.preventDefault).toHaveBeenCalled();
 
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock).toHaveBeenLastCalledWith(
-      expect.anything(),
-      'error',
-      expect.any(Function),
-    );
+    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
   });
 });
 
@@ -1097,7 +1112,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(e);
 
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
 
       // No outcome inserts anything here — not even the (absent) paste action.
       await lastOnAction()('paste');
@@ -1113,7 +1128,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(t.makeEvent(`${filler} host 10.0.0.5 contacted ops@corp.com ${filler}`));
 
       // The block notice replaces the Ghost summary — no paste, no sanitize.
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
       await lastOnAction()('sanitize');
       await lastOnAction()('paste');
       expect(document.execCommand).not.toHaveBeenCalled();
@@ -1131,7 +1146,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(e);
 
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
       expect(document.execCommand).not.toHaveBeenCalled();
     });
 
@@ -1180,7 +1195,7 @@ describe('createPasteGuard — team policy', () => {
       // The blocked destination stops it like any other paste, and crucially the
       // real secret is never restored — the token stays inert.
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
       expect(document.execCommand).not.toHaveBeenCalled();
     });
   });

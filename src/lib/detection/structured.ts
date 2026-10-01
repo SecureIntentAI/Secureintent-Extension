@@ -3,6 +3,11 @@ import { hasFingerprintContext, isPlaceholderCredentialValue, shannon } from './
 
 const KEY_NAME =
   /(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|credential|password|passwd|private[_-]?key|secret|token)(?:$|[_-])/i;
+function publicField(name: string): boolean {
+  const normalized = name.replace(/([a-z])([A-Z])/g, '$1_$2').replace(/[.\s:]+/g, '_').toLowerCase();
+  return /(?:^|[_-])(?:public[_-]?key|key[_-]?id|client[_-]?id|token[_-]?count|secret[_-]?name|password[_-]?hash)(?:$|[_-])/.test(normalized);
+}
+
 function secretField(name: string): boolean {
   const normalized = name
     .replace(/([a-z])([A-Z])/g, '$1_$2')
@@ -270,7 +275,10 @@ export function detectUnknownTokens(
     // treating a public identifier as secret merely because it looks random.
     if (text[start - 1] === '"' || text[start - 1] === "'" || text[i] === '"' || text[i] === "'")
       continue;
-    if (/^[\w-]+\s*=\s*$/.test(text.slice(Math.max(lineStart, start - 128), start))) continue;
+    const fieldPrefix = text.slice(Math.max(lineStart, start - 128), start);
+    if (/^[\w-]+\s*=\s*$/.test(fieldPrefix)) continue;
+    const yamlField = /^\s*([A-Za-z_][A-Za-z0-9_.-]{0,127})\s*:\s*$/.exec(fieldPrefix);
+    if (yamlField && publicField(yamlField[1])) continue;
     if (value.length < 32 || value.length > 512) continue;
     if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value)) continue;
     if (!/[._-]/.test(value) || shannon(value) < 4) continue;

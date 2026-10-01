@@ -76,7 +76,7 @@ describe('sendTelemetry', () => {
     const [url, init] = call;
     expect(url).toBe(`${API_BASE}/v1/telemetry`);
     expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual(ev);
+    expect(JSON.parse(init.body as string)).toEqual({...ev,site:location.hostname});
   });
 
   test('swallows network errors (fire-and-forget)', () => {

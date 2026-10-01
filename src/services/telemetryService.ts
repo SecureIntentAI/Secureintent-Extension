@@ -1,3 +1,4 @@
+import { browser } from '#imports';
 import { postJson } from '@/lib/api/client';
 import type { TelemetryAction, TelemetryDetection, TelemetryEvent } from '@/lib/telemetry/types';
 
@@ -18,5 +19,11 @@ export function buildEvent(input: {
 }
 
 export function sendTelemetry(event: TelemetryEvent): void {
-  postJson('/v1/telemetry', event);
+  if (event.signedIn || event.orgId) {
+    void browser.runtime.sendMessage({type:'si-telemetry', event}).catch(() => {});
+    return;
+  }
+  // Anonymous reports use the page hostname too, never a UI label or full URL.
+  const site = typeof location !== 'undefined' ? location.hostname : event.site;
+  postJson('/v1/telemetry', {...event,site});
 }

@@ -12,7 +12,8 @@ const { sdkEnabled } = vi.hoisted(() => ({ sdkEnabled: { value: true } }));
 
 vi.mock('@/lib/clerkConfig', () => ({
   ACCOUNT_URL: 'https://secureintent.ai/account.html',
-  TEAM_URL: 'https://secureintent.ai/team.html',
+  TEAM_URL: 'https://secureintent.ai/team.html#/overview',
+  SHADOW_DASHBOARD_URL: 'https://secureintent.ai/team.html#/shadow',
   isAuthEnabled: () => true,
   isClerkSdkEnabled: () => sdkEnabled.value,
 }));
@@ -78,6 +79,19 @@ describe('AccountSection — Chrome (Clerk SDK)', () => {
     render(<AccountSection />);
     await screen.findByText('Business Pro · Acme Corp');
     expect(screen.queryByText('Manage team')).toBeNull();
+  });
+
+  test('Manage team opens the canonical overview route directly', async () => {
+    vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:admin'));
+    render(<AccountSection />);
+
+    fireEvent.click(await screen.findByText('Manage team'));
+
+    await waitFor(() =>
+      expect(fakeBrowser.tabs.create).toHaveBeenCalledWith({
+        url: 'https://secureintent.ai/team.html#/overview',
+      }),
+    );
   });
 
   // P1-17: a cleared entitlement used to silently read as "Free".
