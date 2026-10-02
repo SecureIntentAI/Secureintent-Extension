@@ -1,44 +1,42 @@
 import { useEffect, useState } from 'react';
-import { bridgeAvailableItem } from '@/settings';
+import { browser } from '#imports';
 
 /**
- * Whether the extension is working together with the desktop app.
+ * The link to the SecureIntent desktop app, shown only while there is one.
  *
  * Both products watch the clipboard, so without coordination they each warn
- * about the same copy. Paired, the browser tells the app which site the focused
- * tab is on and says when it has already handled something, and the app stays
- * quiet.
+ * about the same copy. Connected, the browser tells the app which site the
+ * focused tab is on and when it has already handled something, and asks it about
+ * text the person restored there with Undo.
  *
- * There is nothing to switch or paste here: the extension pairs on its own with
- * a SecureIntent desktop app on the same machine (see `lib/bridge/pairing.ts`),
- * and whether the two coordinate is a setting in the desktop app. This only says
- * which of the two states it is in.
+ * There is nothing to switch or paste here: the extension pairs on its own (see
+ * `lib/bridge/pairing.ts`) and the switch is in the desktop app. So with no
+ * desktop app, or with it closed or switched off, the popup says nothing about
+ * it at all. The background checks afresh each time the popup opens.
  */
 export function BridgeSettings() {
-  const [available, setAvailable] = useState(false);
+  const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    bridgeAvailableItem
-      .getValue()
-      .then((v) => alive && setAvailable(v))
+    browser.runtime
+      .sendMessage({ type: 'si-bridge-check' })
+      .then((v) => alive && setConnected(v === true))
       .catch(() => {});
-    const unwatch = bridgeAvailableItem.watch((v) => alive && setAvailable(v));
     return () => {
       alive = false;
-      unwatch();
     };
   }, []);
 
+  if (!connected) return null;
   return (
     <section className="si-lockcfg" aria-label="Desktop app">
       <div className="si-lockcfg-head">
         <span className="si-lockcfg-title">Desktop app</span>
       </div>
-      <p className={`si-lockcfg-note ${available ? 'is-set' : ''}`}>
-        {available
-          ? 'Connected automatically. Shares the site you’re on — never the page — with the SecureIntent app on this computer, so one copy isn’t flagged twice.'
-          : 'Not detected. With the SecureIntent desktop app installed, the two connect on their own so one copy isn’t flagged twice.'}
+      <p className="si-lockcfg-note is-set">
+        Connected. Shares the site you’re on — never the page — with the SecureIntent app on this
+        computer, so one copy isn’t flagged twice.
       </p>
     </section>
   );

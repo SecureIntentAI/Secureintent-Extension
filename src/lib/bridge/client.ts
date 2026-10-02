@@ -19,12 +19,24 @@
 import { storage } from '#imports';
 import { siDebug } from '@/lib/debug';
 import { bridgeProof, equalProof } from './auth';
-import { dedupMac, handledFrame, isHex256 } from './hash';
-import { pairingToken } from './pairing';
+import { allowedMac, dedupMac, handledFrame, isHex256, queryAllowedFrame } from './hash';
+import { pairingToken, undoSyncItem } from './pairing';
 import { BRIDGE_PORTS, type BrowserUrlMessage, HANDLED_TTL_MS } from './types';
 
 /** How long any single socket may take to get from open to sent. */
 const CONNECT_TIMEOUT_MS = 1500;
+
+/**
+ * How long a paste may wait on the desktop's answer to `query_allowed`. The
+ * warning is held back for this long at most, so it is short: no answer means
+ * the warning is shown, which is what happens without a desktop app anyway.
+ */
+const QUERY_TIMEOUT_MS = 500;
+
+/** A frame the desktop does not know and drops: reaching `welcome_v2` is the point. */
+const PING_FRAME = JSON.stringify({ type: 'ping' });
+
+type Reply = { type?: string; ok?: boolean };
 
 /**
  * The port we last got a `welcome` from, cached in session storage so a worker
@@ -43,10 +55,20 @@ const pairedPortItem = storage.defineItem<number | null>('session:si_bridge_port
  */
 type Outcome = 'ok' | 'refused' | 'unreachable';
 
-/** Open a socket, complete the handshake, send one frame, close. */
-function speak(port: number, token: string, frame: string): Promise<Outcome> {
+/**
+ * Open a socket, complete the handshake, send one frame, close. With `ask`, the
+ * socket stays open for the desktop's one reply to that frame, which `ask.onReply`
+ * receives; no reply inside `ask.deadlineMs` is `unreachable`.
+ */
+function speak(
+  port: number,
+  token: string,
+  frame: string,
+  ask?: { deadlineMs: number; onReply: (reply: Reply) => void },
+): Promise<Outcome> {
   return new Promise((resolve) => {
     let settled = false;
+    let asked = false;
     const done = (outcome: Outcome) => {
       if (settled) return;
       settled = true;
@@ -65,7 +87,7 @@ function speak(port: number, token: string, frame: string): Promise<Outcome> {
     } catch {
       return resolve('unreachable');
     }
-    const timer = setTimeout(() => done('unreachable'), CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(() => done('unreachable'), ask?.deadlineMs ?? CONNECT_TIMEOUT_MS);
 
     const nonce = crypto.randomUUID();
     let authenticated = false;
@@ -89,6 +111,10 @@ function speak(port: number, token: string, frame: string): Promise<Outcome> {
       } catch {
         return; // malformed frames are ignored, not fatal
       }
+      if (asked) {
+        ask?.onReply(msg);
+        return done('ok');
+      }
       if (msg.type === 'challenge_v2' && !challenged) {
         challenged = true;
         if (typeof msg.nonce !== 'string' || !/^[a-zA-Z0-9_-]{16,128}$/.test(msg.nonce))
@@ -109,8 +135,9 @@ function speak(port: number, token: string, frame: string): Promise<Outcome> {
       if (msg.type !== 'welcome_v2' || !authenticated) return done('unreachable');
       if (!msg.ok) return done('refused'); // token refused
       try {
+        asked = ask !== undefined;
         ws.send(frame);
-        done('ok');
+        if (!ask) done('ok');
       } catch {
         done('unreachable');
       }
@@ -204,4 +231,38 @@ export function sendBrowserUrl(
 export function sendHandled(digestHex: string, ttlMs = HANDLED_TTL_MS): Promise<boolean> {
   if (!isHex256(digestHex)) return Promise.resolve(false);
   return send(async (token) => handledFrame(await dedupMac(token, digestHex), ttlMs));
+}
+
+/**
+ * Ask the desktop whether the person restored this exact text there with Undo in
+ * the last minute, in which case warning about it again would be asking a
+ * question they have just answered.
+ *
+ * Only the port already paired on is asked, once, with a short deadline: the
+ * paste is waiting on this. Anything but a clear yes is a no.
+ */
+export async function queryAllowed(digestHex: string): Promise<boolean> {
+  if (!isHex256(digestHex) || !(await undoSyncItem.getValue())) return false;
+  const port = await pairedPortItem.getValue();
+  const token = await pairingToken();
+  if (port === null || !token) return false;
+  let allowed = false;
+  await speak(port, token, queryAllowedFrame(await allowedMac(token, digestHex)), {
+    deadlineMs: QUERY_TIMEOUT_MS,
+    onReply: (reply) => {
+      allowed = reply.type === 'allowed' && reply.ok === true;
+    },
+  });
+  return allowed;
+}
+
+/**
+ * Whether a desktop app is there and answering right now: asked afresh for its
+ * token (so switching the link off in the desktop app shows at once), then one
+ * handshake. For the popup, which says nothing about the desktop otherwise.
+ */
+export async function desktopConnected(): Promise<boolean> {
+  const token = await pairingToken({ fresh: true });
+  if (!token) return false;
+  return (await sendWith(token, async () => PING_FRAME)) === 'ok';
 }

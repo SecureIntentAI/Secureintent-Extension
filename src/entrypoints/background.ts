@@ -1,6 +1,6 @@
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
-import { sendBrowserUrl, sendHandled } from '@/lib/bridge/client';
+import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from '@/lib/bridge/client';
 import { pairingToken } from '@/lib/bridge/pairing';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL } from '@/lib/clerkConfig';
@@ -191,6 +191,22 @@ export default defineBackground(() => {
         sendHandled(digest).catch(() => false);
       }
       return false;
+    }
+    // A content script is about to warn about a paste and asks whether the
+    // person already restored that text with Undo in the desktop app.
+    if (type === 'si-bridge-allowed') {
+      const { digest } = msg as { digest?: string };
+      queryAllowed(typeof digest === 'string' ? digest : '')
+        .then(sendResponse)
+        .catch(() => sendResponse(false));
+      return true;
+    }
+    // The popup asks whether a desktop app is connected right now.
+    if (type === 'si-bridge-check') {
+      desktopConnected()
+        .then(sendResponse)
+        .catch(() => sendResponse(false));
+      return true;
     }
     // User accepted Terms & Privacy (welcome page or popup) → clear the nag badge.
     if (type === 'si-consent-accepted') {

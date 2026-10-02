@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { bridgeProof } from './auth';
-import { sendBrowserUrl, sendHandled } from './client';
-import { contentDigest, dedupMac } from './hash';
+import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from './client';
+import { allowedMac, contentDigest, dedupMac } from './hash';
 import { NATIVE_HOST } from './pairing';
 
 const TOKEN = 'pairing-token-0123456789';
@@ -18,6 +18,9 @@ let behaviour: Record<number, Behaviour> = {};
 let opened: number[] = [];
 let sent: Array<{ port: number; raw: string }> = [];
 let agentToken = TOKEN;
+/** MACs the agent answers "allowed" for, and whether it answers the question at all. */
+let allowedMacs = new Set<string>();
+let agentAnswersQueries = true;
 
 class FakeSocket {
   onopen: (() => void) | null = null;
@@ -59,13 +62,18 @@ class FakeSocket {
       return;
     }
     sent.push({ port: this.port, raw });
+    if (frame.type === 'query_allowed' && agentAnswersQueries) {
+      this.onmessage?.({
+        data: JSON.stringify({ type: 'allowed', ok: allowedMacs.has(frame.mac) }),
+      });
+    }
   }
 
   close() {}
 }
 
 /** What the desktop's native host says. `null` host: no desktop app installed. */
-let host: { token: string | null } | null = { token: TOKEN };
+let host: { token: string | null; undoSync?: boolean } | null = { token: TOKEN };
 const nativeCalls: unknown[] = [];
 
 beforeEach(async () => {
@@ -74,7 +82,9 @@ beforeEach(async () => {
   opened = [];
   sent = [];
   agentToken = TOKEN;
-  host = { token: TOKEN };
+  allowedMacs = new Set();
+  agentAnswersQueries = true;
+  host = { token: TOKEN, undoSync: true };
   nativeCalls.length = 0;
   vi.stubGlobal('WebSocket', FakeSocket as unknown as typeof WebSocket);
   fakeBrowser.runtime.sendNativeMessage = vi.fn(async (name: string, message: unknown) => {
@@ -82,7 +92,13 @@ beforeEach(async () => {
     if (name !== NATIVE_HOST || host === null) {
       throw new Error('Specified native messaging host not found.');
     }
-    return { type: 'pairing', v: 1, token: host.token, ports: [8137, 8138, 8139, 8140, 8141] };
+    return {
+      type: 'pairing',
+      v: 1,
+      token: host.token,
+      ports: [8137, 8138, 8139, 8140, 8141],
+      ...(host.undoSync ? { undo_sync: true } : {}),
+    };
   }) as unknown as typeof fakeBrowser.runtime.sendNativeMessage;
 });
 
@@ -237,5 +253,91 @@ describe('handled', () => {
       expect(await sendHandled(bad)).toBe(false);
     }
     expect(sent).toEqual([]);
+  });
+});
+
+describe('queryAllowed', () => {
+  const digestOf = () => contentDigest('AKIAIOSFODNN7EXAMPLE');
+
+  beforeEach(async () => {
+    behaviour = { 8137: 'agent' };
+    await sendBrowserUrl('localhost', 3000); // paired, so the port is known
+    sent = [];
+    opened = [];
+  });
+
+  test('yes only for text the desktop says was restored with Undo', async () => {
+    const digest = await digestOf();
+    expect(await queryAllowed(digest)).toBe(false);
+    allowedMacs.add(await allowedMac(TOKEN, digest));
+    expect(await queryAllowed(digest)).toBe(true);
+    expect(await queryAllowed(await contentDigest('something else'))).toBe(false);
+  });
+
+  test('asks with the keyed MAC, never the digest or the value', async () => {
+    const digest = await digestOf();
+    await queryAllowed(digest);
+    expect(JSON.parse(sent[0].raw)).toEqual({
+      type: 'query_allowed',
+      mac: await allowedMac(TOKEN, digest),
+    });
+    expect(sent[0].raw).not.toContain(digest);
+    expect(sent[0].raw).not.toContain('AKIA');
+  });
+
+  test('a desktop app that cannot be asked is not asked, so the paste does not wait', async () => {
+    host = { token: TOKEN }; // an older desktop: no undo_sync in its reply
+    fakeBrowser.reset();
+    await sendBrowserUrl('localhost', 3000);
+    sent = [];
+    opened = [];
+    expect(await queryAllowed(await digestOf())).toBe(false);
+    expect(opened).toEqual([]);
+  });
+
+  test('no answer in time is a no', async () => {
+    agentAnswersQueries = false;
+    const started = Date.now();
+    expect(await queryAllowed(await digestOf())).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  test('only the port already paired on is tried', async () => {
+    behaviour = { 8137: 'dead', 8138: 'agent' };
+    expect(await queryAllowed(await digestOf())).toBe(false);
+    expect(opened).toEqual([8137]);
+  });
+
+  test('a malformed digest is refused without opening anything', async () => {
+    expect(await queryAllowed('not-a-digest')).toBe(false);
+    expect(opened).toEqual([]);
+  });
+});
+
+describe('desktopConnected', () => {
+  test('true when the desktop app answers the handshake', async () => {
+    behaviour = { 8137: 'agent' };
+    expect(await desktopConnected()).toBe(true);
+  });
+
+  test('false when the app is installed but not running', async () => {
+    behaviour = {};
+    expect(await desktopConnected()).toBe(false);
+  });
+
+  test('false, with no port opened, when there is no desktop app or it is switched off', async () => {
+    behaviour = { 8137: 'agent' };
+    host = null;
+    expect(await desktopConnected()).toBe(false);
+    host = { token: null }; // switched off in the desktop app: it hands over no token
+    expect(await desktopConnected()).toBe(false);
+    expect(opened).toEqual([]);
+  });
+
+  test('asks the desktop afresh each time, so switching it off shows at once', async () => {
+    behaviour = { 8137: 'agent' };
+    expect(await desktopConnected()).toBe(true);
+    host = { token: null };
+    expect(await desktopConnected()).toBe(false);
   });
 });

@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { contentDigest, dedupMac, handledFrame, isHex256 } from './hash';
+import {
+  allowedMac,
+  contentDigest,
+  dedupMac,
+  handledFrame,
+  isHex256,
+  queryAllowedFrame,
+} from './hash';
 
 // Shared with the desktop: engine/src/bridge.rs pins the same values in its
 // handled-MAC test. They were computed independently (Python's hashlib/hmac),
@@ -18,6 +25,26 @@ describe('contentDigest', () => {
     expect(await contentDigest('é')).toBe(
       '4a99557e4033c3539de2eb65472017cad5f9557f7a0625a09f1c3f6e2ba69c4c',
     );
+  });
+});
+
+describe('allowedMac', () => {
+  // Pinned in engine/src/bridge.rs as well; computed with Node's crypto.createHmac.
+  const ALLOWED_TOK_A = '18b4f0a3e2c7878d8bc1e00b8cee73112029ff55fd8c5dc0111e09e2320dddef';
+
+  test('matches the shared vector', async () => {
+    expect(await allowedMac('tok-a', DIGEST)).toBe(ALLOWED_TOK_A);
+  });
+
+  test('is not the handled MAC for the same text, so one cannot stand in for the other', async () => {
+    expect(await allowedMac('tok-a', DIGEST)).not.toBe(await dedupMac('tok-a', DIGEST));
+  });
+
+  test('the question carries the MAC and nothing else', () => {
+    expect(JSON.parse(queryAllowedFrame(ALLOWED_TOK_A))).toEqual({
+      type: 'query_allowed',
+      mac: ALLOWED_TOK_A,
+    });
   });
 });
 

@@ -28,7 +28,16 @@ export const MISS_BACKOFF_MS = 60_000;
 const tokenItem = storage.defineItem<string | null>('session:si_bridge_token', { fallback: null });
 const missAtItem = storage.defineItem<number>('session:si_bridge_miss_at', { fallback: 0 });
 
-type PairingReply = { type?: unknown; token?: unknown };
+/**
+ * Whether the desktop app that answered can be asked about a paste the person
+ * restored there with Undo (`undo_sync` in its pairing reply). An older desktop
+ * ignores the question, so it is not asked and the paste is not held up waiting.
+ */
+export const undoSyncItem = storage.defineItem<boolean>('session:si_bridge_undo_sync', {
+  fallback: false,
+});
+
+type PairingReply = { type?: unknown; token?: unknown; undo_sync?: unknown };
 
 /** A token the desktop wrote is a UUID; accept printable ASCII of a sane length. */
 const plausible = (t: unknown): t is string =>
@@ -40,9 +49,12 @@ async function askDesktop(): Promise<string | null> {
       type: 'get_pairing',
       v: 1,
     })) as PairingReply | undefined;
-    return reply?.type === 'pairing' && plausible(reply.token) ? reply.token : null;
+    const token = reply?.type === 'pairing' && plausible(reply.token) ? reply.token : null;
+    await undoSyncItem.setValue(token !== null && reply?.undo_sync === true);
+    return token;
   } catch {
     // "Specified native messaging host not found": no desktop app. Normal.
+    await undoSyncItem.setValue(false);
     return null;
   }
 }

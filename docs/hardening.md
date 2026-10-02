@@ -103,6 +103,14 @@ ask. The token is held in `storage.session` only. `handled` frames carry
 HMAC-SHA256(token, `secureintent-bridge-v2/handled/<sha256hex(paste)>`) as `mac`;
 the unkeyed FNV `hash` is no longer sent.
 
+The desktop answers one question. Before warning about a paste, the extension
+sends `{type:"query_allowed", mac}` with
+HMAC-SHA256(token, `secureintent-bridge-v2/allowed/<sha256hex(paste)>`), and the
+desktop replies `{type:"allowed", ok}`: true only for text the person restored
+there with Undo in the last 60 seconds. A yes is treated as "Paste anyway", so it
+never applies where a team policy blocks the raw paste. The extension asks only a
+desktop whose pairing reply carries `undo_sync: true`, and waits 500 ms at most.
+
 ## Release checks
 
 Run `pnpm compile`, `pnpm test`, and the deterministic Chromium suite (`HEADLESS=1

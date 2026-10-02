@@ -30,11 +30,7 @@ export async function contentDigest(text: string): Promise<string> {
   return hex(await crypto.subtle.digest('SHA-256', enc.encode(text)));
 }
 
-/**
- * HMAC-SHA256 keyed with the pairing token, over
- * `secureintent-bridge-v2/handled/<digest>`, as lowercase hex.
- */
-export async function dedupMac(token: string, digestHex: string): Promise<string> {
+async function keyedMac(token: string, domain: string, digestHex: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     'raw',
     enc.encode(token),
@@ -46,12 +42,35 @@ export async function dedupMac(token: string, digestHex: string): Promise<string
     await crypto.subtle.sign(
       'HMAC',
       key,
-      enc.encode(`secureintent-bridge-v2/handled/${digestHex}`),
+      enc.encode(`secureintent-bridge-v2/${domain}/${digestHex}`),
     ),
   );
+}
+
+/**
+ * HMAC-SHA256 keyed with the pairing token, over
+ * `secureintent-bridge-v2/handled/<digest>`, as lowercase hex.
+ */
+export function dedupMac(token: string, digestHex: string): Promise<string> {
+  return keyedMac(token, 'handled', digestHex);
+}
+
+/**
+ * The same construction in its own domain, `secureintent-bridge-v2/allowed/<digest>`:
+ * what we send to ask the desktop whether the person already restored this exact
+ * text there with Undo (`allowed_mac` in engine/src/bridge.rs). A separate domain,
+ * so a `handled` MAC can never be replayed as this question.
+ */
+export function allowedMac(token: string, digestHex: string): Promise<string> {
+  return keyedMac(token, 'allowed', digestHex);
 }
 
 /** The `handled` frame. The MAC is hex we produced, so plain JSON is safe. */
 export function handledFrame(mac: string, ttlMs: number): string {
   return JSON.stringify({ type: 'handled', mac, ttl_ms: Math.floor(ttlMs) });
+}
+
+/** The `query_allowed` frame. The desktop answers `{type:"allowed", ok}`. */
+export function queryAllowedFrame(mac: string): string {
+  return JSON.stringify({ type: 'query_allowed', mac });
 }
