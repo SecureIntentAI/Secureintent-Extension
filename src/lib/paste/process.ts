@@ -1,4 +1,4 @@
-import { contentHash } from '../bridge/hash';
+import { contentDigest } from '../bridge/hash';
 import { detectSecrets } from '../detection';
 import { locateInText } from '../detection/locate';
 import { rehydrateTokens } from '../detection/rehydrate';
@@ -40,7 +40,7 @@ export function createPasteComputation() {
       });
       detections = detectSecrets(text, patterns, 100_000);
       const preview = input.summary ? [] : detections.slice(0, MAX_PREVIEW_FINDINGS);
-      const result: ScanResult = {
+      const result: Omit<ScanResult, 'handledDigest'> = {
         // Keep all matches here for transformations, but bound page rendering and
         // JSON messaging. Large logs only need counts, never a 40k-row preview.
         detections: preview,
@@ -49,9 +49,12 @@ export function createPasteComputation() {
         summary: input.summary ? summarize(detections) : undefined,
         types: [...new Set(detections.map((d) => d.type))],
         labels: [...new Set(detections.map((d) => d.label))],
-        handledHash: contentHash(text).toString(),
       };
-      return result;
+      // The desktop bridge's dedup key, and the one async step: WebCrypto. The
+      // text is already set above, so an operation that follows does not wait on
+      // it. Computed here, in the worker, because a content script on a plain
+      // http:// page has no crypto.subtle.
+      return contentDigest(text).then((handledDigest) => ({ ...result, handledDigest }));
     }
     if (text === undefined) throw new Error('Paste has not been scanned');
     if (command.operation === 'sanitize') return bounded(sanitize(text, detections));

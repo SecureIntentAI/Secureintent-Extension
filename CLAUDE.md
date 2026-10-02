@@ -120,7 +120,7 @@ src/
                                 #   (shared window flag) so sites are never double-guarded
     sessionlock.content/index.ts# cloud-console PIN lock (AWS/GCP/Azure/CF/DO/Heroku/… consoles)
     bridge.content/index.ts     # reports the focused tab's host/port to the desktop bridge
-                                #   (opt-in, off by default) — see "Desktop bridge" below
+                                #   (only when a desktop app is there) — see "Desktop bridge" below
     background.ts               # service worker (MV3) / background page (MV2): config sync alarm,
                                 #   badge bumps, vault opt-in, entitlement refresh + user-mismatch clear
     popup/                      # React popup: enable/pause, intercepted count, PIN setup, refresh,
@@ -155,9 +155,10 @@ src/
                                 #   + reset.ts (when the UTC-month allowance comes back)
     consent/index.ts            # blocking Terms & Privacy gate (TERMS_VERSION, sync storage)
     clerkConfig.ts              # publishable key, JWT template, sync host, ACCOUNT_URL, IS_FIREFOX
-    bridge/                     # desktop-agent bridge: types (protocol), hash (FNV-1a, matches
-                                #   the agent's content_hash), client (connect-per-burst over
-                                #   ws://127.0.0.1, port scan 8137–8141)
+    bridge/                     # desktop-agent bridge: pairing (token from the desktop over
+                                #   native messaging), types (protocol), hash (SHA-256 digest +
+                                #   token-keyed HMAC, matches the agent's dedup_mac), client
+                                #   (connect-per-burst over ws://127.0.0.1, port scan 8137–8141)
     browserAction.ts            # browser.action (MV3) ?? browser.browserAction (MV2) shim
     badge.ts                    # per-tab intercepted-count toolbar badge
     debug/index.ts              # siDebug / siError / elapsedMs structured console output
@@ -296,11 +297,24 @@ Every upgrade CTA — the popup's Upgrade button and the overlay's locked Pro ac
 `si-open-upgrade` to the background) — opens `ACCOUNT_URL`. The marketing `#tiers` section is for
 people who don't have the extension yet, so it's never an in-product CTA target.
 
-### Desktop bridge (opt-in)
+### Desktop bridge (automatic when the desktop app is installed)
 
 The SecureIntent **desktop app** also watches the clipboard, so without coordination both
-products warn about the same copy. The bridge is how they avoid that. It is **off by default**
-and needs a pairing token, so an unpaired browser never opens a local port.
+products warn about the same copy. The bridge is how they avoid that. There is **no switch in the
+extension**: it pairs on its own with a desktop app on the same machine, and whether the two
+coordinate is a setting in the desktop app, which is what holds the token. With no desktop app the
+browser never opens a local port.
+
+- **Pairing is native messaging** (`lib/bridge/pairing.ts`). The desktop registers itself as the
+  host `ai.secureintent.desktop` for this extension's id only (Chromium: `allowed_origins` with the
+  id pinned by the manifest `key`; Firefox: `allowed_extensions` with the gecko id), and hands over
+  the token on `{type:"get_pairing"}`. Needs the `nativeMessaging` permission. The token is kept in
+  **`storage.session` only** and re-asked each browser session; a refused token is re-asked once
+  (desktop reinstalled). No host means no desktop app — the call rejects, which is normal, and a
+  miss is not re-asked for a minute. `local:si_bridge_available` records only *that* a desktop app
+  answered, so content scripts can skip reporting where there is nobody to report to.
+- Older versions stored a pasted token and an on/off switch in `storage.local`;
+  `forgetManualPairing()` removes both on update.
 
 - `bridge.content` (all pages, `document_idle`) reports the **focused tab's host and port** to
   the background, debounced 250ms and only when they actually change — a content script reads its
@@ -311,21 +325,22 @@ and needs a pairing token, so an unpaired browser never opens a local port.
   its own alert for a copy we already warned about).
 - **Connect-per-burst, never held open.** An MV3 worker is killed after ~30s idle, so a held socket
   dies with it; keeping it alive would mean a keepalive forever and a permanently resident worker.
-- **Pairing is a token pasted into the popup**, copied from the desktop app's dashboard. There is no
-  HTTP handout: the agent's local API is `/health` + `/scan` only, `/scan` already requires the
-  token, and it sends no CORS headers — so a `fetch` would be discarded. WebSockets have no CORS,
-  which is why this needs **no host permission**.
-- Discovery is authentication: the first port in **8137–8141** that answers the handshake with
-  `welcome: true`. A squatter can't fake that without the token.
+- WebSockets have no CORS, which is why the bridge itself needs **no host permission**.
+- Discovery is authentication: the first port in **8137–8141** that answers the v2 handshake. A
+  squatter can't fake that without the token.
+- `pnpm e2e:desktop` (with `SI_DESKTOP_E2E=1` and a running desktop agent) drives the real
+  extension in Chromium against it.
 
 Two things that will bite anyone changing this:
 
 - **`browser_url` must carry `url`.** The agent's `BrowserUrl` variant has a single `url` field and
   drops a frame it can't deserialise *in silence*. `url` is the **origin only** — a path or query
   would leak session tokens. `host`/`port`/`ts` ride along because the agent ignores unknown fields.
-- **The `handled` hash is a u64 and must not pass through a JS number.** It exceeds
-  `Number.MAX_SAFE_INTEGER`, so `JSON.stringify` corrupts it (…433931 → …434000) and every dedup
-  misses silently. `lib/bridge/hash.ts` builds that frame by hand; there is a test asserting it.
+- **`handled` carries a keyed MAC, never a plain hash.** The paste worker computes the SHA-256 of the
+  paste (`handledDigest`); the background keys it with the pairing token as
+  HMAC-SHA256(token, `secureintent-bridge-v2/handled/<digest>`) and sends `{type, mac, ttl_ms}`.
+  The old unsalted FNV-1a `hash` was cheap to test guesses against. Both repos pin one shared
+  vector (`hash.test.ts` / the desktop's `engine/src/bridge.rs`).
 
 ### Firefox / MV2 gotchas
 

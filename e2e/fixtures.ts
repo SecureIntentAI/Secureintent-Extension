@@ -33,7 +33,11 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
   _workerContext: [
     async ({ userDataDir }, use) => {
       const context = await chromium.launchPersistentContext(userDataDir, {
-        channel: 'chromium',
+        // SI_E2E_CHROMIUM: an already-installed Chromium, for a machine whose
+        // Playwright browser build differs from the one this version pins.
+        ...(process.env.SI_E2E_CHROMIUM
+          ? { executablePath: process.env.SI_E2E_CHROMIUM }
+          : { channel: 'chromium' }),
         headless: Boolean(process.env.HEADLESS),
         args: [
           `--disable-extensions-except=${EXT}`,

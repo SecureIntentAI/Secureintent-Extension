@@ -1,5 +1,5 @@
 import { defineContentScript } from '#imports';
-import { bridgeEnabledItem } from '@/settings';
+import { bridgeAvailableItem } from '@/settings';
 
 // Tells the background worker which host the focused tab is on, so it can pass
 // it to the desktop agent and the two products stop warning about the same copy
@@ -26,6 +26,8 @@ export default defineContentScript({
     const page = window as unknown as Record<string, boolean>;
     if (page.__secureintentBridge) return;
     page.__secureintentBridge = true;
+    // Whether a desktop app answered the last pairing lookup. With none on the
+    // machine there is nobody to tell, so the tab is not reported at all.
     let enabled = false;
     // Only report a real move. An in-page route change in a single-page app
     // never alters host or port, so debouncing alone would still send a burst of
@@ -44,7 +46,7 @@ export default defineContentScript({
       const key = `${scheme}://${host}:${port ?? ''}`;
       if (key === lastSent) return;
       lastSent = key;
-      // Fire and forget. No agent, worker asleep, bridge off — all the same
+      // Fire and forget. No agent, worker asleep, agent refusing — all the same
       // answer here, and none of them are this page's problem.
       browser.runtime.sendMessage({ type: 'si-bridge-url', host, port, scheme }).catch(() => {});
     };
@@ -54,18 +56,18 @@ export default defineContentScript({
       timer = setTimeout(report, DEBOUNCE_MS);
     };
 
-    bridgeEnabledItem
+    bridgeAvailableItem
       .getValue()
       .then((v) => {
         enabled = v;
         if (enabled) schedule();
       })
       .catch(() => {
-        // Unreadable settings mean the feature stays off, which is the safe way
-        // for an opt-in to fail.
+        // Unreadable storage leaves reporting off, which only costs a duplicate
+        // warning from the desktop app.
       });
 
-    bridgeEnabledItem.watch((v) => {
+    bridgeAvailableItem.watch((v) => {
       enabled = v;
       if (enabled) schedule();
     });

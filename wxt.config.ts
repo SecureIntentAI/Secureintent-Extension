@@ -58,11 +58,15 @@ export default defineConfig({
       // is being protected. No broad tabs permission needed.
       // cookies: required by @clerk/chrome-extension to read/sync the Clerk session
       // from the Sync Host (secureintent.ai) and the Frontend API domain.
+      // nativeMessaging: ask the SecureIntent desktop app for the bridge pairing
+      // token (lib/bridge/pairing.ts). The browser only reaches a host the desktop
+      // registered for this extension's id; with no desktop app it is never used.
       permissions: [
         'storage',
         'alarms',
         'activeTab',
         'cookies',
+        'nativeMessaging',
         ...(isFirefox ? [] : ['offscreen', 'scripting']),
       ],
       // Privileged access to our Worker so the background config sync + content-script
