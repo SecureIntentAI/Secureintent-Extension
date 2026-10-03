@@ -16,6 +16,7 @@ import {
   getActiveEntitlement,
 } from '@/lib/entitlement';
 import type { RefreshResult } from '@/lib/entitlement/refresh';
+import { configItem } from '@/lib/config/store';
 
 const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
   developer: 'Free',
@@ -98,6 +99,49 @@ function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
       Shadow AI dashboard
       <ChevronIcon />
     </button>
+  );
+}
+
+function PolicyUpdateNotice({ ent, identity }: { ent: ActiveEntitlement; identity: string | null }) {
+  const [revision, setRevision] = useState<number | null>(null);
+  const [dismissed, setDismissed] = useState(false);
+  const orgId = ent.source === 'org_seat' ? ent.org?.id : null;
+  const key = orgId && identity ? `si_policy_notice:${identity.toLowerCase()}:${orgId}` : null;
+
+  useEffect(() => {
+    let active = true;
+    const read = async () => {
+      if (!key || !orgId) {
+        if (active) setRevision(null);
+        return;
+      }
+      const bundle = await configItem.getValue();
+      const version = bundle?.policy?.orgId === orgId ? bundle.policyVersion ?? 0 : 0;
+      const saved = (await browser.storage.local.get(key))[key];
+      if (active) {
+        setRevision(version > 0 ? version : null);
+        setDismissed(saved === version);
+      }
+    };
+    void read().catch(() => { if (active) setRevision(null); });
+    const onChange = () => { void read().catch(() => {}); };
+    browser.storage.onChanged.addListener(onChange);
+    return () => { active = false; browser.storage.onChanged.removeListener(onChange); };
+  }, [key, orgId]);
+
+  if (!revision || dismissed || !key) return null;
+  return (
+    <div className="si-policy-notice" role="status">
+      <strong>Team policy revision {revision} downloaded</strong>
+      <span>Open your account to see the current rules and whether your devices confirmed them.</span>
+      <div className="si-policy-notice-actions">
+        <button type="button" onClick={openAccountTab}>View policy</button>
+        <button type="button" onClick={() => {
+          setDismissed(true);
+          void browser.storage.local.set({ [key]: revision });
+        }}>Got it</button>
+      </div>
+    </div>
   );
 }
 
@@ -212,6 +256,7 @@ function SignedInBar() {
       </button>
       <TeamLink ent={ent} />
       <ShadowDashboardLink ent={ent} />
+      <PolicyUpdateNotice ent={ent} identity={user?.id ?? null} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );
@@ -359,6 +404,7 @@ function FirefoxAccountBar() {
       </button>
       <TeamLink ent={ent} />
       <ShadowDashboardLink ent={ent} />
+      <PolicyUpdateNotice ent={ent} identity={ent.email} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );

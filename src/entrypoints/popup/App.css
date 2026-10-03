@@ -1138,6 +1138,28 @@
   border-radius: 10px;
   background: rgba(255, 107, 107, 0.08);
 }
+
+.si-policy-notice {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(114, 255, 255, .35);
+  border-radius: 10px;
+  background: rgba(114, 255, 255, .08);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.si-policy-notice span { color: var(--si-muted); }
+.si-policy-notice-actions { display: flex; gap: 12px; margin-top: 2px; }
+.si-policy-notice-actions button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--si-cyan);
+  font: inherit;
+  cursor: pointer;
+}
 .si-account-error-text {
   flex: 1;
   font-size: 11.5px;
