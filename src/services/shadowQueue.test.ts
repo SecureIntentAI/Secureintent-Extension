@@ -57,9 +57,9 @@ test('a record arriving during upload and an unacknowledged report stay queued',
   await recordShadow(first, sender);
   let release!: (ids: string[]) => void;
   vi.mocked(sendShadowEvents).mockImplementationOnce(
-    (_t, events) =>
+    () =>
       new Promise((resolve) => {
-        release = () => resolve(events.map((e) => e.eventId));
+        release = (ids) => resolve(ids);
       }),
   );
   const sending = flushShadow();
@@ -68,7 +68,10 @@ test('a record arriving during upload and an unacknowledged report stay queued',
   const recording = recordShadow(next, sender);
   release([]);
   await Promise.all([sending, recording]);
-  expect((await state()).queue.map((e: { eventId: string }) => e.eventId)).toEqual([first.eventId, next.eventId]);
+  expect((await state()).queue.map((e: { eventId: string }) => e.eventId)).toEqual([
+    first.eventId,
+    next.eventId,
+  ]);
 });
 test('revoked consent discards queued data without uploading', async () => {
   await recordShadow(visit(), sender);

@@ -160,3 +160,52 @@ test('a JSON file dropped onto a page is checked before replay', async ({ contex
   await expect(page.locator('#received')).toHaveText('secrets.json');
   await page.close();
 });
+
+test('checks file inputs inside an open shadow root before native handlers receive them', async ({ context }) => {
+  const page = await context.newPage();
+  await page.route(SITE, (route) => route.fulfill({ contentType: 'text/html', body: HTML }));
+  await page.goto(SITE);
+  await page.evaluate(() => {
+    const host = document.createElement('upload-widget');
+    document.body.append(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'shadow-upload';
+    root.append(input);
+    for (const type of ['input', 'change']) {
+      input.addEventListener(type, () => {
+        const received = document.querySelector('#received')!;
+        received.textContent += `${type}:${input.files?.[0]?.name ?? 'empty'};`;
+      });
+    }
+  });
+  await page.locator('#shadow-upload').setInputFiles({
+    name: 'secrets.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ apiKey: 'SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3' })),
+  });
+  const warning = page.locator('secureintent-file-check');
+  await expect(warning.getByRole('button', { name: 'Upload anyway' })).toBeVisible();
+  await expect(page.locator('#received')).toBeEmpty();
+  await warning.getByRole('button', { name: 'Upload anyway' }).click();
+  await expect(page.locator('#received')).toHaveText('input:secrets.json;change:secrets.json;');
+  await page.close();
+});
+
+test('replacing a file while its warning is open cancels the earlier upload', async ({ context }) => {
+  const page = await context.newPage();
+  await page.route(SITE, (route) => route.fulfill({ contentType: 'text/html', body: HTML }));
+  await page.goto(SITE);
+  await page.locator('#upload').setInputFiles({
+    name: 'old-secrets.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ apiKey: 'SYNTHETIC.DETECTOR.TOKEN.9Z7x6W5v4U3t2S1r8Q0p6N3' })),
+  });
+  await expect(page.locator('secureintent-file-check')).toBeVisible();
+  await page.locator('#upload').setInputFiles({
+    name: 'replacement.txt', mimeType: 'text/plain', buffer: Buffer.from('ordinary meeting notes'),
+  });
+  await expect(page.locator('secureintent-file-check')).toHaveCount(0);
+  await expect(page.locator('#received')).toHaveText('replacement.txt');
+  await expect(page.locator('#received')).toHaveAttribute('data-input-seen', 'replacement.txt');
+  await page.close();
+});

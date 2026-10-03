@@ -56,8 +56,12 @@ const browserStore: KeyValueStore = {
 
 export { MAX_PASTE_CHARS } from '@/lib/paste/protocol';
 export const ASYNC_PASTE_CHARS = 64_000;
+export const MAX_PENDING_PASTES = 8;
+export const MAX_PENDING_PASTE_CHARS = 4_000_000;
+const PENDING_PASTE_TTL_MS = 30_000;
 
 interface PasteJob {
+  pageUrl: string;
   input: HTMLElement;
   controller: AbortController;
   ui?: OverlayHandle;
@@ -76,19 +80,9 @@ function editableText(el: HTMLElement): string {
   return range.toString();
 }
 
-function expectedEditableText(
-  el: HTMLElement,
-  selection: Selection,
-  text: string,
-): string | null {
+function expectedEditableText(el: HTMLElement, selection: Selection, text: string): string | null {
   const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
-  if (
-    !anchorNode ||
-    !focusNode ||
-    !el.contains(anchorNode) ||
-    !el.contains(focusNode)
-  )
-    return null;
+  if (!anchorNode || !focusNode || !el.contains(anchorNode) || !el.contains(focusNode)) return null;
 
   const offsetOf = (node: Node, offset: number) => {
     const range = document.createRange();
@@ -105,6 +99,9 @@ function expectedEditableText(
 }
 
 type CapturedPaste = {
+  pageUrl: string;
+  queuedAt: number;
+  rejection?: PasteStatus;
   input: HTMLElement;
   path: EventTarget[];
   text: string;
@@ -218,11 +215,9 @@ function isSecureIntentAuthenticationPage(): boolean {
   const ownHost = host === 'secureintent.ai' || host === 'www.secureintent.ai';
   const localPilot = host === '127.0.0.1' || host === 'localhost';
   if (!ownHost && !localPilot) return false;
-  return [
-    '/account.html',
-    '/business_promo.html',
-    '/lifetime_business_promo.html',
-  ].includes(location.pathname);
+  return ['/account.html', '/business_promo.html', '/lifetime_business_promo.html'].includes(
+    location.pathname,
+  );
 }
 
 export async function createPasteGuard(
@@ -243,6 +238,28 @@ export async function createPasteGuard(
     | undefined;
   const startupQueue: CapturedPaste[] = [];
   let drainingStartupQueue = false;
+  let disposed = false;
+  let queuedCharacters = 0;
+  let queueNotice: CapturedPaste | undefined;
+  const clearQueue = () => {
+    startupQueue.length = 0;
+    queuedCharacters = 0;
+    queueNotice = undefined;
+  };
+  const enqueue = (captured: CapturedPaste) => {
+    const tooLarge = captured.text.length > MAX_PASTE_CHARS;
+    if (
+      tooLarge ||
+      startupQueue.length >= MAX_PENDING_PASTES ||
+      queuedCharacters + captured.text.length > MAX_PENDING_PASTE_CHARS
+    ) {
+      // Retain one text-free notice, never the rejected clipboard contents.
+      queueNotice ??= { ...captured, text: '', rejection: tooLarge ? 'too-large' : 'busy' };
+      return;
+    }
+    queuedCharacters += captured.text.length;
+    startupQueue.push(captured);
+  };
   const captureEarly = (event: Event, text: string): CapturedPaste | undefined => {
     if (isFallback && dedicatedActive()) return;
     const path = event.composedPath();
@@ -250,20 +267,27 @@ export async function createPasteGuard(
     if (!input) return;
     event.preventDefault();
     event.stopImmediatePropagation();
-    return { input, path, text, selection: captureSelection(input) };
+    return {
+      input,
+      path,
+      text,
+      selection: captureSelection(input),
+      pageUrl: location.href,
+      queuedAt: Date.now(),
+    };
   };
   const routePaste = (event: Event, text: string) => {
     // SecureIntent's own Clerk forms must remain usable while the extension is
     // active. Email addresses and recovery codes are expected authentication
     // input here; intercepting them can prevent the user from signing in to the
     // product that owns the guard.
-    if (isSecureIntentAuthenticationPage()) return;
+    if (disposed || isSecureIntentAuthenticationPage()) return;
     if (processPaste) {
       if (isFallback && dedicatedActive()) return;
       return processPaste(event);
     }
     const captured = captureEarly(event, text);
-    if (captured) startupQueue.push(captured);
+    if (captured) enqueue(captured);
   };
   ctx.addEventListener(
     window,
@@ -305,9 +329,17 @@ export async function createPasteGuard(
     return undefined;
   });
   let active: PasteJob | undefined;
-  const live = (job: PasteJob) => active === job && !job.controller.signal.aborted;
+  const live = (job: PasteJob): boolean => {
+    if (active !== job || job.controller.signal.aborted) return false;
+    if (job.pageUrl !== location.href) {
+      clearQueue();
+      finish(job);
+      return false;
+    }
+    return true;
+  };
   const finish = (job: PasteJob) => {
-    if (!live(job)) return;
+    if (active !== job || job.controller.signal.aborted) return;
     job.reportOutcome?.('cancelled');
     active = undefined;
     job.controller.abort();
@@ -329,21 +361,32 @@ export async function createPasteGuard(
   };
   const status = (job: PasteJob, kind: PasteStatus) =>
     present(job, () => mountPasteStatus(ctx, kind, () => finish(job)));
-  const failed = (job: PasteJob, error: unknown) => {
+  const failed = async (job: PasteJob, error: unknown) => {
     if (!live(job)) return;
     siError(config.name, 'paste operation failed; insertion was not confirmed', error);
-    // Keep the failure available in the console for diagnosis without showing
-    // the alarming modal. Release the job so later pastes are not held up.
-    finish(job);
+    try {
+      await status(job, 'error');
+    } catch {
+      finish(job);
+    }
   };
   async function drainStartupQueue() {
-    if (!processPaste || drainingStartupQueue || active) return;
+    if (disposed || !processPaste || drainingStartupQueue || active) return;
     drainingStartupQueue = true;
     try {
-      while (startupQueue.length && !active) {
-        const captured = startupQueue.shift();
-        if (!captured) continue;
+      while ((startupQueue.length || queueNotice) && !active && !disposed) {
+        let captured = startupQueue.shift();
+        if (captured) queuedCharacters -= captured.text.length;
+        else {
+          captured = queueNotice;
+          queueNotice = undefined;
+        }
+        if (!captured?.input.isConnected || captured.pageUrl !== location.href) continue;
+        if (Date.now() - captured.queuedAt > PENDING_PASTE_TTL_MS) {
+          captured = { ...captured, text: '', rejection: 'expired' };
+        }
         if (!enabled || bundle.killSwitch) {
+          if (captured.rejection) continue;
           try {
             insertText(captured.input, captured.text, captured.selection);
           } catch (error) {
@@ -390,16 +433,21 @@ export async function createPasteGuard(
   ctx.addEventListener(window, 'keydown', (event) => {
     if ((event as KeyboardEvent).key === 'Escape' && active) finish(active);
   });
-  ctx.addEventListener(window, 'pagehide', () => {
+  const cancelPending = () => {
+    clearQueue();
     if (active) finish(active);
-  });
+  };
+  ctx.addEventListener(window, 'pagehide', cancelPending);
+  ctx.addEventListener(window, 'popstate', cancelPending);
+  ctx.addEventListener(window, 'hashchange', cancelPending);
   ctx.addEventListener(document, 'input', (event) => {
     if (active && !active.inserting && (event as Event).composedPath().includes(active.input)) {
-      finish(active); // the user edited the composer while a decision was pending
+      cancelPending(); // saved selections are stale after the user edits
     }
   });
   ctx.onInvalidated?.(() => {
-    if (active) finish(active);
+    disposed = true;
+    cancelPending();
   });
 
   // Terms & Privacy consent, cached synchronously (read in the paste handler
@@ -408,7 +456,7 @@ export async function createPasteGuard(
   let reportVisit = () => {};
   const stopConsent = consentItem.watch((value) => {
     consented = consentSatisfied(value);
-    if (!consented && active) finish(active);
+    if (!consented) cancelPending();
     reportVisit();
   });
 
@@ -416,7 +464,7 @@ export async function createPasteGuard(
   let enabled = await isEnabled().catch(() => true);
   const stopEnabled = enabledItem.watch((value) => {
     enabled = value ?? true;
-    if (!enabled && active) finish(active);
+    if (!enabled) cancelPending();
   });
 
   // Prime the entitlement cache so the gate can be read synchronously in the
@@ -427,12 +475,14 @@ export async function createPasteGuard(
   });
   const accessScope = (value: Awaited<ReturnType<typeof entitlementItem.getValue>>) => {
     const blob = value?.blob;
-    return blob ? JSON.stringify([blob.clerkUserId,blob.org?.id,blob.plan,blob.pro,blob.features]) : null;
+    return blob
+      ? JSON.stringify([blob.clerkUserId, blob.org?.id, blob.plan, blob.pro, blob.features])
+      : null;
   };
   let previousAccess = accessScope(await entitlementItem.getValue());
-  const stopIdentity = entitlementItem.watch(value => {
+  const stopIdentity = entitlementItem.watch((value) => {
     const nextAccess = accessScope(value);
-    if (nextAccess !== previousAccess && active) finish(active);
+    if (nextAccess !== previousAccess) cancelPending();
     previousAccess = nextAccess;
   });
   ctx.onInvalidated?.(() => {
@@ -472,12 +522,13 @@ export async function createPasteGuard(
   // anonymised or sanitized version of it. The rule is about the site, not the
   // secret, so every insert path is closed here.
   let policyBlockedHost = isBlockedHost(location.hostname, policy.blockedSites);
-  const aiPage =
+  let aiPage =
     window.top === window ? recognizeAiPage(location.hostname, location.pathname) : undefined;
   let demoRules = SHADOW_DEMO ? await demoPolicyItem.getValue().catch(() => []) : [];
-  const currentAiMode = () => SHADOW_DEMO
-    ? aiPasteMode({ ...policy, aiServices: demoRules }, aiPage?.id)
-    : aiPasteMode(policy, aiPage?.id);
+  const currentAiMode = () =>
+    SHADOW_DEMO
+      ? aiPasteMode({ ...policy, aiServices: demoRules }, aiPage?.id)
+      : aiPasteMode(policy, aiPage?.id);
   let aiMode = currentAiMode();
   let aiBlocked = aiMode === 'block_all';
   let destinationBlocked = policyBlockedHost || aiBlocked;
@@ -487,8 +538,8 @@ export async function createPasteGuard(
   // every other paste keep working; only this one paste is dropped.
   let allowRawPaste = !policy.blockInsteadOfWarn && !destinationBlocked;
   const stopConfig = configItem.watch((next) => {
-    // A decision based on old rules must never insert after a policy change.
-    if (active) finish(active);
+    // Discard pending work before ending a job: ending it can drain the queue.
+    cancelPending();
     bundle = next ?? DEFAULT_BUNDLE;
     compiled = mergeCatalog(compilePatterns(bundle.patterns));
     patterns = [
@@ -512,7 +563,7 @@ export async function createPasteGuard(
   ctx.onInvalidated?.(stopConfig);
   if (SHADOW_DEMO) {
     const stopDemoPolicy = demoPolicyItem.watch((rules) => {
-      if (active) finish(active);
+      cancelPending();
       demoRules = rules ?? [];
       aiMode = currentAiMode();
       aiBlocked = aiMode === 'block_all';
@@ -542,11 +593,7 @@ export async function createPasteGuard(
 
   // Vault access is origin-bound by the background and expiry checked per read.
 
-  const onPaste = async (
-    event: Event,
-    captured?: CapturedPaste,
-    ownsFallbackEvent = false,
-  ) => {
+  const onPaste = async (event: Event, captured?: CapturedPaste, ownsFallbackEvent = false) => {
     const e = event as ClipboardEvent;
     let job: PasteJob | undefined;
     const intercept = () => {
@@ -554,6 +601,7 @@ export async function createPasteGuard(
       e.stopImmediatePropagation();
       if (!job) {
         job = {
+          pageUrl: captured?.pageUrl ?? location.href,
           input: captured?.input ?? input,
           controller: new AbortController(),
           uiVersion: 0,
@@ -566,6 +614,7 @@ export async function createPasteGuard(
     };
     let input: HTMLElement;
     try {
+      if (disposed) return;
       if (isFallback && dedicatedActive() && !ownsFallbackEvent) return; // a dedicated guard owns this site
       if (!enabled) return; // protection off — let the paste through
       if (bundle.killSwitch) return; // remote kill-switch — let the paste through
@@ -582,7 +631,8 @@ export async function createPasteGuard(
         findComposer(path, DEFAULT_BUNDLE.sites.fallback.inputSelector);
       if (!composer) return;
       input = composer;
-      if (active && !active.input.isConnected) finish(active);
+      if (active && (!active.input.isConnected || active.pageUrl !== location.href))
+        cancelPending();
       if (active) {
         // Returning alone allows Chrome's default paste to leak raw text.
         e.preventDefault();
@@ -591,7 +641,9 @@ export async function createPasteGuard(
         // It will be checked after the user resolves the current paste.
         const queuedText = readClipboardText(e.clipboardData);
         if (queuedText) {
-          startupQueue.push({
+          enqueue({
+            pageUrl: location.href,
+            queuedAt: Date.now(),
             input,
             path: e.composedPath(),
             text: queuedText,
@@ -601,6 +653,19 @@ export async function createPasteGuard(
         return;
       }
 
+      // Single-page navigation can change the AI service without reloading this script.
+      aiPage =
+        window.top === window ? recognizeAiPage(location.hostname, location.pathname) : undefined;
+      aiMode = currentAiMode();
+      aiBlocked = aiMode === 'block_all';
+      destinationBlocked = policyBlockedHost || aiBlocked;
+      allowRawPaste = !policy.blockInsteadOfWarn && !destinationBlocked;
+      reportVisit();
+
+      if (captured?.rejection) {
+        await status(intercept(), captured.rejection);
+        return;
+      }
       const text = readClipboardText(e.clipboardData);
       if (!text) return;
       if (text.length > MAX_PASTE_CHARS) {
@@ -899,18 +964,23 @@ export async function createPasteGuard(
                   fingerprintsPromise.then((dets) => {
                     if (dets.length === 0) return;
                     sendTelemetry(
-                      buildEvent({
-                        site: config.name,
-                        policyVersion: bundle.policyVersion ?? 0,
-                        detections: dets,
-                        action: telemetryAction,
-                        plan: snapshot.plan,
-                        source: snapshot.source,
-                        signedIn: snapshot.signedIn,
-                        businessDomain: snapshot.businessDomain,
-                        orgId: snapshot.orgId,
-                        actorId: snapshot.actorId,
-                      }),
+                      buildEvent(
+                        {
+                          site: config.name,
+                          policyVersion: bundle.policyVersion ?? 0,
+                          detections: dets,
+                          action: telemetryAction,
+                          plan: snapshot.plan,
+                          source: snapshot.source,
+                          signedIn: snapshot.signedIn,
+                          businessDomain: snapshot.businessDomain,
+                          orgId: snapshot.orgId,
+                          actorId: snapshot.actorId,
+                        },
+                        snapshot.signedIn && snapshot.userId
+                          ? { userId: snapshot.userId, orgId: snapshot.orgId }
+                          : null,
+                      ),
                     );
                   });
                 }
@@ -962,16 +1032,23 @@ export async function createPasteGuard(
     _sender: unknown,
     respond: (value: unknown) => void,
   ) => {
-    if ((message as {type?:string})?.type === 'si-policy-probe' && !(isFallback && dedicatedActive())) {
-      void browser.runtime.sendMessage({
-        type:'si-policy-receipt', nonce:(message as {nonce?:string}).nonce,
-        orgId:bundle.policy?.orgId ?? null, version:bundle.policyVersion ?? 0,
-        active:enabled && consented && !bundle.killSwitch,
-      }).catch(() => {});
+    if (
+      (message as { type?: string })?.type === 'si-policy-probe' &&
+      !(isFallback && dedicatedActive())
+    ) {
+      void browser.runtime
+        .sendMessage({
+          type: 'si-policy-receipt',
+          nonce: (message as { nonce?: string }).nonce,
+          orgId: bundle.policy?.orgId ?? null,
+          version: bundle.policyVersion ?? 0,
+          active: enabled && consented && !bundle.killSwitch,
+        })
+        .catch(() => {});
       return false;
     }
     if (
-      (message as { type?: string })?.type !== 'si-protection-status'  ||
+      (message as { type?: string })?.type !== 'si-protection-status' ||
       (isFallback && dedicatedActive())
     )
       return false;

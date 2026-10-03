@@ -1,4 +1,4 @@
-import { getActiveEntitlement } from '@/lib/entitlement';
+import { browser } from '#imports';
 import { getJson } from '@/lib/api/client';
 import { shouldAcceptBundle } from '@/lib/config/freshness';
 import { configItem, saveBundle } from '@/lib/config/store';
@@ -6,6 +6,7 @@ import type { ConfigBundle } from '@/lib/config/types';
 import { validateBundle } from '@/lib/config/validate';
 import { verifyBundle } from '@/lib/config/verify';
 import { siError } from '@/lib/debug';
+import { getActiveEntitlement } from '@/lib/entitlement';
 import { getClerkToken } from './entitlementBackground';
 
 export interface SyncResult {
@@ -40,6 +41,18 @@ async function authHeaders(): Promise<{
 
 export async function syncConfig(): Promise<SyncResult> {
   const request = ++syncRevision;
+  const result = await syncConfigRequest(request);
+  if (request === syncRevision) {
+    await browser.storage.local
+      .set({
+        si_policy_sync_status: { at: Date.now(), status: result.status },
+      })
+      .catch(() => {});
+  }
+  return result;
+}
+
+async function syncConfigRequest(request: number): Promise<SyncResult> {
   try {
     const expectedOrg = (await getActiveEntitlement()).org?.id ?? null;
     const { headers, authenticated } = await authHeaders();
@@ -59,7 +72,7 @@ export async function syncConfig(): Promise<SyncResult> {
 
     const currentOrg = (await getActiveEntitlement()).org?.id ?? null;
     if (currentOrg !== expectedOrg || (incoming.policy?.orgId ?? null) !== expectedOrg) {
-      return { status:'error',error:'policy organization mismatch' };
+      return { status: 'error', error: 'policy organization mismatch' };
     }
     const current = await configItem.getValue();
     if (request !== syncRevision) return { status: 'unchanged', version: current?.version };

@@ -12,6 +12,7 @@ import {
   evaluateStored,
   FREE_ENTITLEMENT,
   getActiveEntitlement,
+  getEntitlementSnapshot,
   hasFeatureCached,
   initEntitlementCache,
 } from './index';
@@ -125,6 +126,23 @@ describe('evaluateStored', () => {
 });
 
 describe('cache', () => {
+  test('telemetry ownership comes from verified payload and clears on invalid signatures', async () => {
+    const blob = proBlob({ exp: 9_999_999_999 });
+    await entitlementItem.setValue({
+      blob: { ...blob, clerkUserId: 'unsigned-edit' },
+      payload: JSON.stringify(blob),
+      signature: 'valid',
+    });
+    const stop = await initEntitlementCache();
+    try {
+      expect(getEntitlementSnapshot().userId).toBe('user_1');
+      await entitlementItem.setValue({ blob, signature: 'nope' });
+      await vi.waitFor(() => expect(getEntitlementSnapshot().userId).toBeNull());
+    } finally {
+      stop();
+    }
+  });
+
   test('initEntitlementCache primes hasFeatureCached and updates on change', async () => {
     await entitlementItem.setValue({ blob: proBlob({ exp: 9_999_999_999 }), signature: 'valid' });
     const stop = await initEntitlementCache();

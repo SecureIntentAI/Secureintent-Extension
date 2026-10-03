@@ -93,6 +93,7 @@ async function computeView(): Promise<PlanView> {
     source: ent.source,
     pro: ent.pro,
     signedIn: stored !== null,
+    userId: null, // this snapshot is used only for quota display
     businessDomain: ent.businessDomain,
     orgId: ent.org?.id ?? null,
     orgName: ent.org?.name ?? null,

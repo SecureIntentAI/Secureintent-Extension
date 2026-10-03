@@ -170,7 +170,9 @@ test('a catastrophic regex cannot freeze the page or popup and times out closed'
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(popup.locator('.si-wordmark')).toBeVisible({ timeout: 2000 });
   await popup.close();
-  await expect(status).toHaveCount(0,{timeout:8000});
+  await expect(status.getByText('Paste could not be completed', { exact: true })).toBeVisible({ timeout: 8000 });
+  await status.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(status).toHaveCount(0);
   await expect(page.locator('#ta')).toHaveValue('');
   await page.screenshot({ path: test.info().outputPath('worker-timeout.png') });
   await page.locator('#ta').click();

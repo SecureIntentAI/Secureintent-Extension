@@ -1,52 +1,194 @@
 import { browser } from '#imports';
-import { CLERK_SYNC_HOST, WEB_APP_URL } from '@/lib/clerkConfig';
+import { API_BASE } from '@/lib/api/client';
+import { withDeadline } from '@/lib/async';
+import { CLERK_PUBLISHABLE_KEY, CLERK_SYNC_HOST, WEB_APP_URL } from '@/lib/clerkConfig';
 
-// Clerk stores the active session JWT in the `__session` cookie on the web app's
-// domain. On Firefox we can't mint a token via the chrome-extension SDK (its FAPI
-// call comes from the random moz-extension:// origin, which Clerk can't
-// allowlist), so we read this cookie directly with the privileged `browser.cookies`
-// API instead. The token was minted by the web app (an allowlisted origin), and
-// our Worker verifies it server-side via JWKS — no extension-origin check anywhere.
-// Requires the `cookies` permission + host_permissions for the cookie's domain
-// (both already declared for secureintent.ai and clerk.secureintent.ai).
-const SESSION_COOKIE = '__session';
+type Session = { token: string; sub: string; sid: string; exp: number };
+type Snapshot = { session: Session | null; proof: string; key: string };
+const FRESH_MARGIN_MS = 10_000;
+let suffix: Promise<string> | undefined;
+let generation = 0;
+let cached: { key: string; session: Session } | undefined;
+let pending:
+  | { key: string; controller: AbortController; promise: Promise<string | null> }
+  | undefined;
+let failure: { key: string; until: number; denied: boolean } | undefined;
 
-function looksLikeJwt(value: string): boolean {
-  const parts = value.split('.');
-  return parts.length === 3 && parts.every((p) => p.length > 0);
+function cookieSuffix(): Promise<string> {
+  suffix ??= crypto.subtle
+    .digest('SHA-1', new TextEncoder().encode(CLERK_PUBLISHABLE_KEY))
+    .then((digest) =>
+      btoa(String.fromCharCode(...new Uint8Array(digest)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .slice(0, 8),
+    );
+  return suffix;
 }
 
-/** Decode the `sub` (Clerk user id) from a JWT without verifying it. */
-function jwtSub(token: string): string | null {
+// Decode only for routing/binding. The API verifies every token and the returned
+// entitlement/policy is separately signature checked by the extension.
+function sessionHint(token: string): Session | null {
+  if (token.length > 8_192) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))) return null;
   try {
-    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-    return typeof payload.sub === 'string' ? payload.sub : null;
+    const value = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+    if (
+      typeof value.sub !== 'string' ||
+      typeof value.sid !== 'string' ||
+      !Number.isFinite(value.exp)
+    )
+      return null;
+    return { token, sub: value.sub, sid: value.sid, exp: value.exp };
   } catch {
     return null;
   }
 }
 
-/**
- * Read the Clerk session JWT from the web app cookie. Tries the app origin first,
- * then the Frontend API host. Returns null if signed out (no cookie) or on error.
- * The JWT may be expired if the user hasn't opened the app recently — the Worker
- * rejects expired tokens and the caller keeps its last-known entitlement (fail-safe).
- */
-export async function getClerkTokenFromCookie(): Promise<string | null> {
-  for (const url of [WEB_APP_URL, CLERK_SYNC_HOST]) {
-    try {
-      const cookie = await browser.cookies.get({ url, name: SESSION_COOKIE });
-      const value = cookie?.value?.trim();
-      if (value && looksLikeJwt(value)) return value;
-    } catch {
-      // Permission/host mismatch for this URL — try the next.
-    }
-  }
-  return null;
+async function cookie(url: string, name: string): Promise<string> {
+  return (await browser.cookies.get({ url, name }))?.value ?? '';
 }
 
-/** The signed-in Clerk user id, derived from the session cookie (Firefox path). */
+async function snapshot(): Promise<Snapshot> {
+  const instance = await cookieSuffix();
+  const candidates: Session[] = [];
+  // Suffixed cookies take precedence. Never select another Clerk instance by
+  // prefix alone. __client_uat=0 is Clerk's explicit signed-out marker.
+  const uat =
+    (await cookie(WEB_APP_URL, `__client_uat_${instance}`)) ||
+    (await cookie(WEB_APP_URL, '__client_uat'));
+  if (uat === '0') return { session: null, proof: '', key: 'signed-out' };
+  for (const url of [WEB_APP_URL, CLERK_SYNC_HOST]) {
+    const value = (await cookie(url, `__session_${instance}`)) || (await cookie(url, '__session'));
+    const session = sessionHint(value);
+    if (session) candidates.push(session);
+  }
+  const first = candidates[0];
+  // A fresh FAPI cookie for this session must not be masked by the web app's
+  // expired copy. A different account never silently replaces the app account.
+  const session = first
+    ? candidates
+        .filter((s) => s.sub === first.sub && s.sid === first.sid)
+        .sort((a, b) => b.exp - a.exp)[0]
+    : null;
+  const proof =
+    (await cookie(CLERK_SYNC_HOST, `__client_${instance}`)) ||
+    (await cookie(CLERK_SYNC_HOST, '__client'));
+  return { session, proof, key: JSON.stringify([session?.token, proof, uat]) };
+}
+
+/** Cancel old-account work immediately. No client proof or JWT is persisted. */
+export function invalidateCookieSession(): void {
+  generation++;
+  cached = undefined;
+  failure = undefined;
+  const old = pending;
+  pending = undefined;
+  old?.controller.abort();
+}
+
+/** Install only in the Firefox background; web sign-out/account switches sync live. */
+export function watchCookieSession(onChange: () => void): void {
+  const hosts = [WEB_APP_URL, CLERK_SYNC_HOST].map((url) => new URL(url).hostname);
+  browser.cookies.onChanged.addListener((change) => {
+    const domain = change.cookie.domain.replace(/^\./, '');
+    if (!hosts.some((host) => host === domain || host.endsWith(`.${domain}`))) return;
+    void cookieSuffix()
+      .then((instance) => {
+        if (
+          !['__session', '__client', '__client_uat'].some(
+            (name) => change.cookie.name === name || change.cookie.name === `${name}_${instance}`,
+          )
+        )
+          return;
+        invalidateCookieSession();
+        onChange();
+      })
+      .catch(() => {});
+  });
+}
+
+/** Renew an expired Firefox JWT using the verified HttpOnly Clerk client proof. */
+export async function getClerkTokenFromCookie(): Promise<string | null> {
+  const version = generation;
+  const current = await snapshot();
+  if (version !== generation) throw new Error('Session changed');
+  if (!current.session) return null;
+  const session = current.session;
+  if (current.session.exp * 1_000 > Date.now() + FRESH_MARGIN_MS) return current.session.token;
+  if (cached?.key === current.key && cached.session.exp * 1_000 > Date.now() + FRESH_MARGIN_MS)
+    return cached.session.token;
+  if (failure?.key === current.key && failure.until > Date.now()) {
+    if (failure.denied) return null;
+    throw new Error('Session renewal temporarily unavailable');
+  }
+  if (!current.proof)
+    throw new Error('Sign in on the SecureIntent account page to renew this session');
+  if (pending?.key === current.key) return pending.promise;
+  pending?.controller.abort();
+  const controller = new AbortController();
+  const promise = withDeadline(
+    async (signal) => {
+      const response = await fetch(`${API_BASE}/v1/auth/session/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionToken: session.token, clientToken: current.proof }),
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'error',
+        signal,
+      });
+      if (version !== generation || (await snapshot()).key !== current.key)
+        throw new Error('Session changed');
+      signal.throwIfAborted();
+      if (response.status === 401 || response.status === 403) {
+        failure = { key: current.key, until: Number.POSITIVE_INFINITY, denied: true };
+        cached = undefined;
+        return null;
+      }
+      if (!response.ok) {
+        const retry = Number(response.headers.get('Retry-After'));
+        failure = {
+          key: current.key,
+          until:
+            Date.now() + (Number.isFinite(retry) ? Math.min(300, Math.max(30, retry)) : 30) * 1_000,
+          denied: false,
+        };
+        throw new Error('Session renewal temporarily unavailable');
+      }
+      const data = (await response.json()) as { token?: unknown };
+      const fresh = typeof data.token === 'string' ? sessionHint(data.token) : null;
+      if (
+        !fresh ||
+        fresh.sub !== session.sub ||
+        fresh.sid !== session.sid ||
+        fresh.exp * 1_000 <= Date.now() + FRESH_MARGIN_MS
+      )
+        throw new Error('Invalid renewed session');
+      if (version !== generation || (await snapshot()).key !== current.key)
+        throw new Error('Session changed');
+      signal.throwIfAborted();
+      cached = { key: current.key, session: fresh };
+      failure = undefined;
+      return fresh.token;
+    },
+    controller,
+    9_000,
+  )
+    .catch((error) => {
+      if (version === generation && !failure)
+        failure = { key: current.key, until: Date.now() + 30_000, denied: false };
+      throw error;
+    })
+    .finally(() => {
+      if (pending?.controller === controller) pending = undefined;
+    });
+  pending = { key: current.key, controller, promise };
+  return promise;
+}
+
+/** Identity hint remains available during outages; this does not grant access. */
 export async function getClerkUserIdFromCookie(): Promise<string | null> {
-  const token = await getClerkTokenFromCookie();
-  return token ? jwtSub(token) : null;
+  return (await snapshot()).session?.sub ?? null;
 }

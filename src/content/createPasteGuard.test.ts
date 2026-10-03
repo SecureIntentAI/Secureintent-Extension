@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing/fake-browser';
-import { githubTokenChecksum } from '@/lib/detection/validators';
 import { type BundlePolicy, DEFAULT_BUNDLE, saveBundle } from '@/lib/config';
 import { acceptTerms, consentItem } from '@/lib/consent';
+import { githubTokenChecksum } from '@/lib/detection/validators';
 import { createPasteProcessor } from '@/lib/paste/client';
 import { createPasteComputation } from '@/lib/paste/process';
 import type { PasteCommand } from '@/lib/paste/protocol';
 import { consumeAnonymize, getAnonymizeStatus } from '@/lib/quota';
+import * as shadowCatalog from '@/lib/shadow/catalog';
 import type { OverlayAction } from '@/overlay/Overlay';
 import * as telemetryService from '@/services/telemetryService';
 import { getBlockedCount, setEnabled } from '@/settings';
-import { ASYNC_PASTE_CHARS, createPasteGuard, MAX_PASTE_CHARS } from './createPasteGuard';
+import {
+  ASYNC_PASTE_CHARS,
+  createPasteGuard,
+  MAX_PASTE_CHARS,
+  MAX_PENDING_PASTES,
+} from './createPasteGuard';
 
 vi.mock('@/lib/vault/client', async () => {
   const { handleVaultMessage } = await import('@/services/vaultBackground');
@@ -191,7 +197,10 @@ describe('createPasteGuard', () => {
     await oldAction('paste');
     expect(document.execCommand).not.toHaveBeenCalled();
     await t.firePaste(t.makeEvent('ordinary safe message'));
-    expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
+    expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({
+      host: location.hostname,
+      sensitiveOnly: false,
+    });
     expect(document.execCommand).not.toHaveBeenCalled();
   });
 
@@ -293,9 +302,160 @@ describe('createPasteGuard', () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
     expect(mountOverlayMock).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
+    mountPasteStatusMock.mock.calls.at(-1)![2]();
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('bounds pending pastes and explains overflow without scanning rejected text', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    for (let i = 0; i < MAX_PENDING_PASTES + 3; i++) {
+      const event = t.makeEvent(SECRET);
+      await t.firePaste(event);
+      expect(event.preventDefault).toHaveBeenCalled();
+    }
+    for (let i = 0; i < MAX_PENDING_PASTES; i++) {
+      await lastOnAction()('cancel');
+      await vi.waitFor(() => expect(mountOverlayMock).toHaveBeenCalledTimes(i + 2));
+    }
+    await lastOnAction()('cancel');
+    await vi.waitFor(() => expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('busy'));
+    expect(createPasteProcessor).toHaveBeenCalledTimes(MAX_PENDING_PASTES + 1);
+    expect(document.execCommand).not.toHaveBeenCalled();
+    mountPasteStatusMock.mock.calls.at(-1)![2]();
+    await t.firePaste(t.makeEvent('ordinary text'));
+    expect(document.execCommand).toHaveBeenCalledOnce();
+  });
+
+  test('a queued second paste cannot weaken an active sensitive-only policy block', async () => {
+    const service = shadowCatalog.AI_CATALOG.services[0];
+    const recognize = vi.spyOn(shadowCatalog, 'recognizeAiPage').mockReturnValue(service);
+    try {
+      await saveBundle({
+        ...DEFAULT_BUNDLE,
+        policy: {
+          blockedSites: [],
+          blockInsteadOfWarn: false,
+          requireSessionLock: false,
+          aiServices: [
+            { serviceId: service.id, classification: 'review', pasteMode: 'block_sensitive' },
+          ],
+        },
+      });
+      const t = setup();
+      await t.start();
+      await t.firePaste(t.makeEvent(SECRET));
+      expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock?.sensitiveOnly).toBe(true);
+      const action = lastOnAction();
+      await t.firePaste(t.makeEvent(SECRET));
+      await action('paste');
+      expect(document.execCommand).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(mountOverlayMock).toHaveBeenCalledTimes(2));
+      await lastOnAction()('paste');
+      expect(document.execCommand).not.toHaveBeenCalled();
+    } finally {
+      recognize.mockRestore();
+    }
+  });
+
+  test('applies the AI service policy after same-document navigation', async () => {
+    const previous = location.href;
+    const service = shadowCatalog.AI_CATALOG.services[0];
+    const recognize = vi
+      .spyOn(shadowCatalog, 'recognizeAiPage')
+      .mockImplementation((_, path) => (path === '/copilot' ? service : undefined));
+    try {
+      history.replaceState({}, '', '/');
+      await saveBundle({
+        ...DEFAULT_BUNDLE,
+        policy: {
+          blockedSites: [],
+          blockInsteadOfWarn: false,
+          requireSessionLock: false,
+          aiServices: [{ serviceId: service.id, classification: 'review', pasteMode: 'block_all' }],
+        },
+      });
+      const t = setup();
+      await t.start();
+      await t.firePaste(t.makeEvent('ordinary message'));
+      expect(document.execCommand).toHaveBeenCalledOnce();
+      vi.mocked(document.execCommand).mockClear();
+      history.pushState({}, '', '/copilot');
+      await t.firePaste(t.makeEvent('ordinary message'));
+      expect(mountOverlayMock.mock.calls.at(-1)![1].policyBlock).toEqual({
+        host: location.hostname,
+        sensitiveOnly: false,
+      });
+      expect(document.execCommand).not.toHaveBeenCalled();
+    } finally {
+      recognize.mockRestore();
+      history.replaceState({}, '', previous);
+    }
+  });
+
+  test('does not retain an oversized second paste', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    await t.firePaste(t.makeEvent('x'.repeat(MAX_PASTE_CHARS + 1)));
+    await lastOnAction()('cancel');
+    await vi.waitFor(() => expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('too-large'));
+    expect(createPasteProcessor).toHaveBeenCalledOnce();
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  test('editing the composer clears pending pastes and their saved selections', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const action = lastOnAction();
+    await t.firePaste(t.makeEvent('queued ordinary text'));
+    t.editInput();
+    await action('paste');
+    await Promise.resolve();
+    expect(createPasteProcessor).toHaveBeenCalledOnce();
+    expect(document.execCommand).not.toHaveBeenCalled();
+  });
+
+  test('changing policy discards pending clean text before ending the current job', async () => {
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    const action = lastOnAction();
+    await t.firePaste(t.makeEvent('queued ordinary text'));
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      policy: {
+        blockedSites: [location.hostname],
+        blockInsteadOfWarn: true,
+        requireSessionLock: false,
+      },
+    });
+    const ui = await mountOverlayMock.mock.results[0].value;
+    await vi.waitFor(() => expect(ui.remove).toHaveBeenCalled());
+    await action('paste');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    expect(createPasteProcessor).toHaveBeenCalledOnce();
+  });
+
+  test('same-document navigation cancels the pending decision and queued text', async () => {
+    const previous = location.href;
+    try {
+      const t = setup();
+      await t.start();
+      await t.firePaste(t.makeEvent(SECRET));
+      const action = lastOnAction();
+      await t.firePaste(t.makeEvent('queued ordinary text'));
+      history.pushState({}, '', '/new-editor');
+      await action('paste');
+      expect(document.execCommand).not.toHaveBeenCalled();
+      expect(createPasteProcessor).toHaveBeenCalledOnce();
+    } finally {
+      history.replaceState({}, '', previous);
+    }
   });
 
   test('does not block when protection is disabled', async () => {
@@ -312,7 +472,11 @@ describe('createPasteGuard', () => {
   test('records the number of secrets intercepted', async () => {
     const t = setup();
     await t.start();
-    await t.firePaste(t.makeEvent(`${SECRET} and ${'gh' + 'p_' + 'b'.repeat(30) + githubTokenChecksum('b'.repeat(30))}`));
+    await t.firePaste(
+      t.makeEvent(
+        `${SECRET} and ${'gh' + 'p_' + 'b'.repeat(30) + githubTokenChecksum('b'.repeat(30))}`,
+      ),
+    );
 
     // recordBlocked is fire-and-forget, so poll for the write to land.
     await vi.waitFor(async () => expect(await getBlockedCount()).toBe(2));
@@ -392,7 +556,8 @@ describe('createPasteGuard', () => {
     vi.mocked(consumeAnonymize).mockResolvedValueOnce(false);
     await lastOnAction()('redact');
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
+    mountPasteStatusMock.mock.calls.at(-1)![2]();
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
@@ -407,7 +572,8 @@ describe('createPasteGuard', () => {
     await lastOnAction()('redact');
     expect(consumeAnonymize).not.toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
+    mountPasteStatusMock.mock.calls.at(-1)![2]();
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
@@ -954,7 +1120,7 @@ describe('createPasteGuard', () => {
     expect(e.preventDefault).toHaveBeenCalled();
 
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.some(call=>call[1]==='error')).toBe(false);
+    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
   });
 });
 
@@ -1112,7 +1278,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(e);
 
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly: false });
 
       // No outcome inserts anything here — not even the (absent) paste action.
       await lastOnAction()('paste');
@@ -1128,7 +1294,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(t.makeEvent(`${filler} host 10.0.0.5 contacted ops@corp.com ${filler}`));
 
       // The block notice replaces the Ghost summary — no paste, no sanitize.
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly: false });
       await lastOnAction()('sanitize');
       await lastOnAction()('paste');
       expect(document.execCommand).not.toHaveBeenCalled();
@@ -1146,7 +1312,7 @@ describe('createPasteGuard — team policy', () => {
       await t.firePaste(e);
 
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly: false });
       expect(document.execCommand).not.toHaveBeenCalled();
     });
 
@@ -1195,7 +1361,7 @@ describe('createPasteGuard — team policy', () => {
       // The blocked destination stops it like any other paste, and crucially the
       // real secret is never restored — the token stays inert.
       expect(e.preventDefault).toHaveBeenCalled();
-      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly:false });
+      expect(lastProps().policyBlock).toEqual({ host: location.hostname, sensitiveOnly: false });
       expect(document.execCommand).not.toHaveBeenCalled();
     });
   });

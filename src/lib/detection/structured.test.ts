@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { detectSecrets } from './index';
+import { detectSecrets, sanitize, tokenizeSecrets } from './index';
 import { PATTERNS } from './patterns';
 import { githubTokenChecksum } from './validators';
 
@@ -53,6 +53,28 @@ test('does not promote public identifiers or placeholders in added formats', () 
   expect(detectSecrets('Authorization: Bearer changeme')).toEqual([]);
 });
 
+test.each([
+  ['password: password', 'password: [#SECRET_1#]', 'password: MASKED'],
+  ['password_secret: password', 'password_secret: [#SECRET_1#]', 'password_secret: MASKED'],
+  [
+    '<password>password</password>',
+    '<password>[#SECRET_1#]</password>',
+    '<password>MASKED</password>',
+  ],
+  [
+    '<password hint="clientSecretValue12">clientSecretValue12</password>',
+    '<password hint="clientSecretValue12">[#SECRET_1#]</password>',
+    '<password hint="clientSecretValue12">MASKED</password>',
+  ],
+])('redacts the credential value when it also occurs in markup: %s', (text, sanitized, anonymized) => {
+  const findings = detectSecrets(text);
+  expect(findings).toHaveLength(1);
+  expect(sanitize(text, findings)).toBe(sanitized);
+  expect(tokenizeSecrets(text, findings).text.replace(/⟦SI:[0-9a-f]{8}⟧/g, 'MASKED')).toBe(
+    anonymized,
+  );
+});
+
 test('known provider detector still wins when it overlaps a structured value', () => {
   const value = `sk-${'a'.repeat(30)}`;
   const findings = detectSecrets(JSON.stringify({ apiKey: value }));
@@ -67,9 +89,7 @@ test('validates the offline checksum on current GitHub and npm token formats', (
   const npmToken = `npm_${payload}${checksum}`;
   const badChecksum = `${checksum[0] === '0' ? '1' : '0'}${checksum.slice(1)}`;
 
-  expect(detectSecrets(githubToken)).toMatchObject([
-    { label: 'GitHub token', match: githubToken },
-  ]);
+  expect(detectSecrets(githubToken)).toMatchObject([{ label: 'GitHub token', match: githubToken }]);
   expect(detectSecrets(npmToken)).toMatchObject([{ label: 'npm token', match: npmToken }]);
   expect(detectSecrets(`ghp_${payload}${badChecksum}`)).toEqual([]);
   expect(detectSecrets(`npm_${payload}${badChecksum}`)).toEqual([]);

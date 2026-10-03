@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { REQUEST_TIMEOUT_MS } from '@/lib/async';
+import { DEFAULT_BUNDLE } from '@/lib/config/default';
+import { configItem } from '@/lib/config/store';
+import type { SignedEntitlement } from '@/lib/entitlement';
 import { entitlementItem } from '@/lib/entitlement/store';
-import { invalidateEntitlementRefresh, refreshEntitlementBg } from './entitlementBackground';
+import {
+  getClerkToken,
+  invalidateEntitlementRefresh,
+  refreshEntitlementBg,
+} from './entitlementBackground';
 
 const { clientMock, tokenMock } = vi.hoisted(() => ({ clientMock: vi.fn(), tokenMock: vi.fn() }));
 vi.mock('@clerk/chrome-extension/client', () => ({ createClerkClient: clientMock }));
@@ -15,7 +22,7 @@ vi.mock('@/lib/clerkConfig', () => ({
 }));
 vi.mock('@/lib/config/verify', () => ({ verifyBundle: vi.fn(async () => true) }));
 
-const blob = {
+const blob: SignedEntitlement = {
   clerkUserId: 'user_1',
   plan: 'developer_pro',
   pro: true,
@@ -93,9 +100,48 @@ test('a failed network request releases the shared request for retry', async () 
 
 test('an offline refresh still clears a cached plan from a different known user', async () => {
   await refreshEntitlementBg();
+  await configItem.setValue({
+    ...DEFAULT_BUNDLE,
+    policy: {
+      orgId: 'org_previous',
+      blockInsteadOfWarn: true,
+      requireSessionLock: true,
+      blockedSites: ['example.com'],
+    },
+  });
   expect((await entitlementItem.getValue())?.blob.clerkUserId).toBe('user_1');
   clientMock.mockResolvedValue({ session: { getToken: tokenMock, user: { id: 'user_2' } } });
   vi.mocked(fetch).mockRejectedValueOnce(new Error('offline'));
   expect((await refreshEntitlementBg()).status).toBe('error');
   expect(await entitlementItem.getValue()).toBeNull();
+  expect(await configItem.getValue()).toBeNull();
+});
+
+test("an outage retains the same user's cached team rules", async () => {
+  const teamBlob = { ...blob, org: { id: 'org_current', name: 'Current', role: 'org:member' } };
+  await entitlementItem.setValue({ blob: teamBlob, signature: 'valid' });
+  const config = {
+    ...DEFAULT_BUNDLE,
+    policy: {
+      orgId: 'org_current',
+      blockInsteadOfWarn: true,
+      requireSessionLock: true,
+      blockedSites: ['example.com'],
+    },
+  };
+  await configItem.setValue(config);
+  clientMock.mockResolvedValue({ session: { getToken: tokenMock, user: { id: 'user_1' } } });
+  vi.mocked(fetch).mockRejectedValueOnce(new Error('offline'));
+  expect((await refreshEntitlementBg()).status).toBe('error');
+  expect((await entitlementItem.getValue())?.blob.clerkUserId).toBe('user_1');
+  expect(await configItem.getValue()).toEqual(config);
+});
+
+test('direct token callers time out and can retry a stalled SDK', async () => {
+  vi.useFakeTimers();
+  clientMock.mockImplementationOnce(() => new Promise(() => {}));
+  const pending = expect(getClerkToken()).rejects.toThrow('Request timed out');
+  await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+  await pending;
+  expect(await getClerkToken()).toContain('.');
 });

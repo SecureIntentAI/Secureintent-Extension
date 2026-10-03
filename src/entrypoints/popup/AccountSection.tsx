@@ -1,4 +1,3 @@
-import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 import { Show, useUser } from '@clerk/chrome-extension';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browser } from '#imports';
@@ -9,6 +8,7 @@ import {
   SHADOW_DASHBOARD_URL,
   TEAM_URL,
 } from '@/lib/clerkConfig';
+import { configItem } from '@/lib/config/store';
 import {
   type ActiveEntitlement,
   canManageTeam,
@@ -16,7 +16,7 @@ import {
   getActiveEntitlement,
 } from '@/lib/entitlement';
 import type { RefreshResult } from '@/lib/entitlement/refresh';
-import { configItem } from '@/lib/config/store';
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 
 const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
   developer: 'Free',
@@ -30,9 +30,10 @@ const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
  * Both browser paths use this, so the two bars can't drift apart again.
  */
 function planText(ent: ActiveEntitlement): string {
-  const label = ent.plan === 'business_pro' && ent.org?.role === 'org:member'
-    ? 'Developer Pro'
-    : PLAN_LABEL[ent.plan];
+  const label =
+    ent.plan === 'business_pro' && ent.org?.role === 'org:member'
+      ? 'Developer Pro'
+      : PLAN_LABEL[ent.plan];
   return ent.org ? `${label} · ${ent.org.name ?? 'Team'}` : label;
 }
 
@@ -102,44 +103,76 @@ function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
   );
 }
 
-function PolicyUpdateNotice({ ent, identity }: { ent: ActiveEntitlement; identity: string | null }) {
-  const [revision, setRevision] = useState<number | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+function PolicyUpdateNotice({
+  ent,
+  identity,
+}: {
+  ent: ActiveEntitlement;
+  identity: string | null;
+}) {
+  const [notice, setNotice] = useState<{
+    key: string;
+    revision: number;
+    dismissed: boolean;
+  } | null>(null);
+  const readId = useRef(0);
   const orgId = ent.source === 'org_seat' ? ent.org?.id : null;
   const key = orgId && identity ? `si_policy_notice:${identity.toLowerCase()}:${orgId}` : null;
 
   useEffect(() => {
     let active = true;
     const read = async () => {
+      const id = ++readId.current;
+      const live = () => active && id === readId.current;
       if (!key || !orgId) {
-        if (active) setRevision(null);
+        if (live()) setNotice(null);
         return;
       }
-      const bundle = await configItem.getValue();
-      const version = bundle?.policy?.orgId === orgId ? bundle.policyVersion ?? 0 : 0;
-      const saved = (await browser.storage.local.get(key))[key];
-      if (active) {
-        setRevision(version > 0 ? version : null);
-        setDismissed(saved === version);
+      try {
+        const bundle = await configItem.getValue();
+        const version = bundle?.policy?.orgId === orgId ? (bundle.policyVersion ?? 0) : 0;
+        const saved = (await browser.storage.local.get(key))[key];
+        if (live()) {
+          setNotice(version > 0 ? { key, revision: version, dismissed: saved === version } : null);
+        }
+      } catch {
+        if (live()) setNotice(null);
       }
     };
-    void read().catch(() => { if (active) setRevision(null); });
-    const onChange = () => { void read().catch(() => {}); };
+    void read();
+    const onChange = () => {
+      void read();
+    };
     browser.storage.onChanged.addListener(onChange);
-    return () => { active = false; browser.storage.onChanged.removeListener(onChange); };
+    return () => {
+      active = false;
+      readId.current++;
+      browser.storage.onChanged.removeListener(onChange);
+    };
   }, [key, orgId]);
 
-  if (!revision || dismissed || !key) return null;
+  if (!notice || notice.key !== key || notice.dismissed) return null;
+  const { revision } = notice;
   return (
     <div className="si-policy-notice" role="status">
       <strong>Team policy revision {revision} downloaded</strong>
-      <span>Open your account to see the current rules and whether your devices confirmed them.</span>
+      <span>
+        Open your account to see the current rules and whether your devices confirmed them.
+      </span>
       <div className="si-policy-notice-actions">
-        <button type="button" onClick={openAccountTab}>View policy</button>
-        <button type="button" onClick={() => {
-          setDismissed(true);
-          void browser.storage.local.set({ [key]: revision });
-        }}>Got it</button>
+        <button type="button" onClick={openAccountTab}>
+          View policy
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            readId.current++; // a pending read must not undo this acknowledgement
+            setNotice({ ...notice, dismissed: true });
+            void browser.storage.local.set({ [notice.key]: revision }).catch(() => {});
+          }}
+        >
+          Got it
+        </button>
       </div>
     </div>
   );
@@ -411,15 +444,22 @@ function FirefoxAccountBar() {
 }
 
 export function AccountSection() {
-  if (SHADOW_DEMO) return (
-    <div className="si-profile-wrap">
-      <button type="button" className="si-team-link" onClick={() => {
-        browser.tabs.create({ url: new URL('shadow.html', browser.runtime.getURL('/popup.html')).href }).catch(() => {});
-      }}>
-        Live Shadow AI · local demo <ChevronIcon />
-      </button>
-    </div>
-  );
+  if (SHADOW_DEMO)
+    return (
+      <div className="si-profile-wrap">
+        <button
+          type="button"
+          className="si-team-link"
+          onClick={() => {
+            browser.tabs
+              .create({ url: new URL('shadow.html', browser.runtime.getURL('/popup.html')).href })
+              .catch(() => {});
+          }}
+        >
+          Live Shadow AI · local demo <ChevronIcon />
+        </button>
+      </div>
+    );
   if (isClerkSdkEnabled()) {
     // Chrome: full Clerk SDK with signed-in/out components.
     return (

@@ -1,16 +1,16 @@
-import { ensurePolicyStream, stopPolicyStream } from '@/services/policyStream';
-import { reportBusinessConnection } from '@/services/businessConnection';
-import { sendAuthenticatedTelemetry } from '@/services/telemetryBackground';
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
 import { sendBrowserUrl, sendHandledHash } from '@/lib/bridge/client';
 import { browserAction } from '@/lib/browserAction';
-import { ACCOUNT_URL } from '@/lib/clerkConfig';
+import { ACCOUNT_URL, IS_FIREFOX } from '@/lib/clerkConfig';
 import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 import { getActiveEntitlement } from '@/lib/entitlement';
 import { PASTE_READY } from '@/lib/paste/protocol';
 import { offlineConsume } from '@/lib/quota/offline';
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
+import { reportBusinessConnection } from '@/services/businessConnection';
 import { invalidateConfigSync, syncConfig } from '@/services/configService';
+import { watchCookieSession } from '@/services/cookieToken';
 import {
   consumeUsage,
   getUsageStatus,
@@ -20,12 +20,24 @@ import {
 import { injectOpenTabs } from '@/services/injectOpenTabs';
 import { markInstallPending, reportInstall, syncUninstallUrl } from '@/services/installAttribution';
 import { installPasteWorkerBackground } from '@/services/pasteWorkerBackground';
-import { handleRefreshMessage, SHADOW_POLICY_SYNC_ALARM, SYNC_ALARM } from '@/services/scheduler';
+import { ensurePolicyStream, stopPolicyStream } from '@/services/policyStream';
+import {
+  createSyncRunner,
+  ensureSyncAlarms,
+  handleRefreshMessage,
+  SHADOW_POLICY_SYNC_ALARM,
+  SYNC_ALARM,
+} from '@/services/scheduler';
 import { flushShadow, installShadowBackground, recordShadow } from '@/services/shadowBackground';
+import { installShadowDemo, recordDemoShadow } from '@/services/shadowDemoBackground';
+import {
+  flushAuthenticatedTelemetry,
+  invalidateTelemetryDelivery,
+  sendAuthenticatedTelemetry,
+  TELEMETRY_RETRY_ALARM,
+} from '@/services/telemetryBackground';
 import { installVaultBackground } from '@/services/vaultBackground';
 import { isBridgeEnabled } from '@/settings';
-import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
-import { installShadowDemo, recordDemoShadow } from '@/services/shadowDemoBackground';
 
 const WELCOME_URL = '/welcome.html';
 
@@ -67,9 +79,22 @@ export default defineBackground(() => {
   updateConsentBadge();
   syncUninstallUrl();
 
+  const reconcile = createSyncRunner(async (full) => {
+    await refreshEntitlementBg();
+    const entitlement = await getActiveEntitlement();
+    if (full || entitlement.org) await syncConfig();
+    if (entitlement.org) {
+      await reportBusinessConnection();
+      await ensurePolicyStream();
+    } else stopPolicyStream();
+    await flushAuthenticatedTelemetry();
+  });
+
   // Accepting the Terms releases the install report on Firefox (Chrome sends it
   // straight away; there it's already gone by now and this is a no-op).
   consentItem.watch(() => {
+    invalidateTelemetryDelivery();
+    void flushAuthenticatedTelemetry().catch(() => {});
     stopPolicyStream();
     void ensurePolicyStream();
     updateConsentBadge();
@@ -85,37 +110,39 @@ export default defineBackground(() => {
   // entitlement (and re-check binding). Content scripts watch the entitlement
   // item, so their gating updates live — no popup open or manual refresh needed.
   let entRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-  browser.storage.onChanged.addListener((changes) => {
-    if (!Object.keys(changes).some((k) => k.toLowerCase().includes('clerk'))) return;
+  const sessionChanged = () => {
     invalidateEntitlementRefresh(); // invalidate immediately, before the debounce
     invalidateConfigSync();
+    invalidateTelemetryDelivery();
     stopPolicyStream();
     clearTimeout(entRefreshTimer);
     entRefreshTimer = setTimeout(() => {
-      void refreshEntitlementBg().then(() => syncConfig()).then(() => reportBusinessConnection()).then(() => ensurePolicyStream()).catch(() => {});
+      void reconcile(true);
     }, 500); // debounce Clerk's burst of session writes
+  };
+  browser.storage.onChanged.addListener((changes) => {
+    if (Object.keys(changes).some((k) => k.toLowerCase().includes('clerk'))) sessionChanged();
   });
+  if (IS_FIREFOX) watchCookieSession(sessionChanged);
 
   // Vault reads/writes are served by the origin-bound background handler.
   // Sync plan on startup, then drop any cached entitlement that isn't for the
   // currently signed-in user (a signed blob is otherwise portable between installs).
-  void refreshEntitlementBg().then(() => syncConfig()).then(() => reportBusinessConnection()).then(() => ensurePolicyStream()).catch(() => {});
-  browser.alarms.create(SYNC_ALARM.name, { periodInMinutes: SYNC_ALARM.periodInMinutes });
-  browser.alarms.create(SHADOW_POLICY_SYNC_ALARM.name, {
-    periodInMinutes: SHADOW_POLICY_SYNC_ALARM.periodInMinutes,
-  });
+  void reconcile(true);
+  void ensureSyncAlarms().catch(() => {});
+  void flushAuthenticatedTelemetry().catch(() => {});
   browser.alarms.onAlarm.addListener((a) => {
+    if (a.name === TELEMETRY_RETRY_ALARM) {
+      void flushAuthenticatedTelemetry().catch(() => {});
+      return;
+    }
     if (a.name === SHADOW_POLICY_SYNC_ALARM.name) {
       // Revalidate membership before each team cycle; also discovers newly invited users.
-      void refreshEntitlementBg().then(() => getActiveEntitlement()).then(async entitlement => {
-        if (entitlement.org) { await syncConfig(); await reportBusinessConnection(); await ensurePolicyStream(); }
-        else stopPolicyStream();
-      }).catch(() => {});
+      void reconcile(false);
       return;
     }
     if (a.name === SYNC_ALARM.name) {
-      syncConfig();
-      void refreshEntitlementBg(); // ride the existing 2h alarm
+      void reconcile(true);
       reportInstall(); // retry an install report that couldn't send (offline at install)
       void flushShadow();
     }
@@ -123,9 +150,12 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
     if (type === 'si-policy-receipt') return false;
-    if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo') return false;
+    if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo')
+      return false;
     if (type === 'si-telemetry' && sender.tab && !sender.tab.incognito) {
-      void sendAuthenticatedTelemetry(msg, sender.url).then(sendResponse).catch(() => sendResponse(null));
+      void sendAuthenticatedTelemetry(msg, sender.url)
+        .then(sendResponse)
+        .catch(() => sendResponse(null));
       return true;
     }
     if (type === 'si-open-settings') {
@@ -144,7 +174,10 @@ export default defineBackground(() => {
         incognito: sender.tab?.incognito,
       };
       if (SHADOW_DEMO) void recordDemoShadow(msg, source).catch(() => {});
-      else void recordShadow(msg, source).then(() => flushShadow()).catch(() => {});
+      else
+        void recordShadow(msg, source)
+          .then(() => flushShadow())
+          .catch(() => {});
       return false;
     }
     // Per-tab badge: a content script reports how many secrets it just caught.
