@@ -65,7 +65,7 @@ describe('AccountSection — Chrome (Clerk SDK)', () => {
   test('a team seat names the team on the plan badge', async () => {
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    expect(await screen.findByText('Business Pro · Acme Corp')).toBeTruthy();
+    expect(await screen.findByText('Developer Pro · Acme Corp')).toBeTruthy();
   });
 
   test('an admin gets the team console link; a member does not', async () => {
@@ -76,7 +76,7 @@ describe('AccountSection — Chrome (Clerk SDK)', () => {
 
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    await screen.findByText('Business Pro · Acme Corp');
+    await screen.findByText('Developer Pro · Acme Corp');
     expect(screen.queryByText('Manage team')).toBeNull();
   });
 
@@ -124,7 +124,7 @@ describe('AccountSection — Firefox (cookie auth)', () => {
   test('a member sees the team but no console link', async () => {
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    await screen.findByText('Business Pro · Acme Corp');
+    await screen.findByText('Developer Pro · Acme Corp');
     expect(screen.queryByText('Manage team')).toBeNull();
   });
 

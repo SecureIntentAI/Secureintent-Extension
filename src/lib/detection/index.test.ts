@@ -207,8 +207,8 @@ describe('detectSecrets — env credentials', () => {
   test('detects a PASSWORD= assignment', () => {
     const dets = detectSecrets('PASSWORD=hunter2supersecret');
     const env = dets.find((d) => d.type === 'env-credential');
-    expect(env?.label).toBe('Credential assignment');
-    expect(env?.match).toBe('PASSWORD=hunter2supersecret');
+    expect(env?.label).toBe('Structured credential');
+    expect(env?.match).toBe('hunter2supersecret');
   });
 
   test('detects a connection string with inline credentials', () => {
@@ -353,7 +353,7 @@ describe('detectSecrets — false-positive guards (normal text)', () => {
 describe('detectSecrets — multiple & overlap', () => {
   test('finds multiple secrets sorted by position', () => {
     const a = 'sk-' + 'a'.repeat(30);
-    const b = 'ghp_' + 'b'.repeat(36);
+    const b = checksummedFixture('gh' + 'p_');
     const dets = detectSecrets(`first ${a} then ${b}`);
     expect(dets).toHaveLength(2);
     expect(dets[0].start).toBeLessThan(dets[1].start);

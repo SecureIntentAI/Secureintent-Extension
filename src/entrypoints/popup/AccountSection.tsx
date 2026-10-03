@@ -29,7 +29,10 @@ const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
  * Both browser paths use this, so the two bars can't drift apart again.
  */
 function planText(ent: ActiveEntitlement): string {
-  return ent.org ? `${PLAN_LABEL[ent.plan]} · ${ent.org.name ?? 'Team'}` : PLAN_LABEL[ent.plan];
+  const label = ent.plan === 'business_pro' && ent.org?.role === 'org:member'
+    ? 'Developer Pro'
+    : PLAN_LABEL[ent.plan];
+  return ent.org ? `${label} · ${ent.org.name ?? 'Team'}` : label;
 }
 
 /** Why the plan on screen might not be the one the user expects. */
@@ -87,9 +90,9 @@ function TeamLink({ ent }: { ent: ActiveEntitlement }) {
   );
 }
 
-/** Available to every active Business seat; policy controls remain admin-only. */
+/** The organization dashboard contains team activity, so only admins see this link. */
 function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
-  if (ent.plan !== 'business_pro' || !ent.org) return null;
+  if (ent.plan !== 'business_pro' || !canManageTeam(ent)) return null;
   return (
     <button type="button" className="si-team-link" onClick={openShadowDashboard}>
       Shadow AI dashboard

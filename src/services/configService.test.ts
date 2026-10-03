@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { FREE_ENTITLEMENT, getActiveEntitlement } from '@/lib/entitlement';
 import { DEFAULT_BUNDLE } from '@/lib/config/default';
 import { getPolicy } from '@/lib/config/policy';
 import { getActiveBundle, saveBundle } from '@/lib/config/store';
@@ -10,11 +11,16 @@ import { syncConfig } from './configService';
 // sync carries it when there is one. Mocked: real minting needs the Clerk SDK.
 const { getClerkTokenMock } = vi.hoisted(() => ({ getClerkTokenMock: vi.fn() }));
 vi.mock('./entitlementBackground', () => ({ getClerkToken: getClerkTokenMock }));
+vi.mock('@/lib/entitlement', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/entitlement')>()),
+  getActiveEntitlement: vi.fn(),
+}));
 
 beforeEach(() => {
   fakeBrowser.reset();
   getClerkTokenMock.mockReset();
   getClerkTokenMock.mockResolvedValue(null); // default: signed out
+  vi.mocked(getActiveEntitlement).mockReset().mockResolvedValue(FREE_ENTITLEMENT);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -162,6 +168,8 @@ describe('syncConfig — team policy', () => {
 
   test('a signed-in member stores a policy published at the current catalogue version', async () => {
     getClerkTokenMock.mockResolvedValue('jwt-abc');
+    vi.mocked(getActiveEntitlement).mockResolvedValue({ ...FREE_ENTITLEMENT,
+      org: { id: 'org_acme', name: 'Acme', role: 'org:member' } });
     await saveBundle({ ...DEFAULT_BUNDLE, version: 12 });
     const b = {
       ...DEFAULT_BUNDLE,

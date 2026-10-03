@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { detectSecrets } from './index';
 import { redact } from './redact';
+import { githubTokenChecksum } from './validators';
 
 describe('redact', () => {
   test('removes the raw secret from the output', () => {
@@ -30,7 +31,8 @@ describe('redact', () => {
 
   test('redacts multiple secrets without corrupting offsets', () => {
     const a = 'sk-' + 'a'.repeat(30);
-    const b = 'ghp_' + 'b'.repeat(36);
+    const payload = 'A'.repeat(30);
+    const b = `${'gh' + 'p_'}${payload}${githubTokenChecksum(payload)}`;
     const text = `${a} middle ${b}`;
     const out = redact(text, detectSecrets(text));
 

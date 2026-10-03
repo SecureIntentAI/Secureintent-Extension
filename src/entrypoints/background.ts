@@ -1,3 +1,6 @@
+import { ensurePolicyStream, stopPolicyStream } from '@/services/policyStream';
+import { reportBusinessConnection } from '@/services/businessConnection';
+import { flushAuthenticatedTelemetry, sendAuthenticatedTelemetry } from '@/services/telemetryBackground';
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
 import { sendBrowserUrl, sendHandledHash } from '@/lib/bridge/client';
@@ -67,6 +70,8 @@ export default defineBackground(() => {
   // Accepting the Terms releases the install report on Firefox (Chrome sends it
   // straight away; there it's already gone by now and this is a no-op).
   consentItem.watch(() => {
+    stopPolicyStream();
+    void ensurePolicyStream();
     updateConsentBadge();
     reportInstall();
     // Firefox arms (or disarms) the goodbye ping with the same decision.
@@ -84,25 +89,32 @@ export default defineBackground(() => {
     if (!Object.keys(changes).some((k) => k.toLowerCase().includes('clerk'))) return;
     invalidateEntitlementRefresh(); // invalidate immediately, before the debounce
     invalidateConfigSync();
+    stopPolicyStream();
     clearTimeout(entRefreshTimer);
     entRefreshTimer = setTimeout(() => {
-      void refreshEntitlementBg().then(() => syncConfig());
+      void refreshEntitlementBg().then(() => syncConfig()).then(() => reportBusinessConnection()).then(() => ensurePolicyStream()).catch(() => {});
     }, 500); // debounce Clerk's burst of session writes
   });
 
   // Vault reads/writes are served by the origin-bound background handler.
-  syncConfig();
   // Sync plan on startup, then drop any cached entitlement that isn't for the
   // currently signed-in user (a signed blob is otherwise portable between installs).
-  void refreshEntitlementBg();
+  void refreshEntitlementBg().then(() => syncConfig()).then(() => reportBusinessConnection()).then(() => ensurePolicyStream()).catch(() => {});
   browser.alarms.create(SYNC_ALARM.name, { periodInMinutes: SYNC_ALARM.periodInMinutes });
   browser.alarms.create(SHADOW_POLICY_SYNC_ALARM.name, {
     periodInMinutes: SHADOW_POLICY_SYNC_ALARM.periodInMinutes,
   });
+  browser.alarms.create('si-telemetry-retry', { periodInMinutes: 1 });
   browser.alarms.onAlarm.addListener((a) => {
+    if (a.name === 'si-telemetry-retry') {
+      void flushAuthenticatedTelemetry().catch(() => {});
+      return;
+    }
     if (a.name === SHADOW_POLICY_SYNC_ALARM.name) {
-      void getActiveEntitlement().then((entitlement) => {
-        if (entitlement.plan === 'business_pro' && entitlement.org) return syncConfig();
+      // Revalidate membership before each team cycle; also discovers newly invited users.
+      void refreshEntitlementBg().then(() => getActiveEntitlement()).then(async entitlement => {
+        if (entitlement.org) { await syncConfig(); await reportBusinessConnection(); await ensurePolicyStream(); }
+        else stopPolicyStream();
       }).catch(() => {});
       return;
     }
@@ -115,7 +127,12 @@ export default defineBackground(() => {
   });
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
+    if (type === 'si-policy-receipt') return false;
     if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo') return false;
+    if (type === 'si-telemetry' && sender.tab && !sender.tab.incognito) {
+      void sendAuthenticatedTelemetry(msg, sender.url).then(sendResponse).catch(() => sendResponse(null));
+      return true;
+    }
     if (type === 'si-open-settings') {
       void browser.tabs.create({ url: browser.runtime.getURL('/popup.html') }).catch(() => {});
       return false;

@@ -43,6 +43,10 @@ test('a second paste stays blocked until the first warning is resolved', async (
   await expect(page.locator('#ta')).toHaveValue('');
   await expect(overlay).toHaveCount(1);
   await overlay.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+  // The second intercepted paste is queued and checked after the first closes.
+  await expect(overlay.getByRole('button', { name: 'Paste anyway', exact: true })).toBeVisible();
+  await expect(page.locator('#ta')).toHaveValue('');
+  await overlay.getByRole('button', { name: 'Cancel', exact: true }).last().click();
   await expect(overlay).toHaveCount(0);
   await page.locator('#ta').click();
   await paste(page, OTHER);
@@ -167,12 +171,10 @@ test('a catastrophic regex cannot freeze the page or popup and times out closed'
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(popup.locator('.si-wordmark')).toBeVisible({ timeout: 2000 });
   await popup.close();
-  await expect(status.getByText('Paste could not be completed', { exact: true })).toBeVisible({
-    timeout: 8000,
-  });
+  // The failed scan drops the paste and releases the temporary checking state.
+  await expect(status).toHaveCount(0, { timeout: 8000 });
   await expect(page.locator('#ta')).toHaveValue('');
   await page.screenshot({ path: test.info().outputPath('worker-timeout.png') });
-  await status.getByRole('button', { name: 'Dismiss' }).click();
   await page.locator('#ta').click();
   await paste(page, SECRET);
   await expect(page.locator('secureintent-overlay')).toHaveCount(1);

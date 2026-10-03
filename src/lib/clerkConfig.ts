@@ -26,11 +26,12 @@ export const WEB_APP_URL = import.meta.env.WXT_WEB_APP_URL ?? 'https://secureint
  */
 export const ACCOUNT_URL = `${WEB_APP_URL}/account.html`;
 
-/** The team console: seats, members, and what the team's extensions are stopping. */
-export const TEAM_URL = `${WEB_APP_URL}/team.html`;
+/** The team console's canonical landing view. Opening the final hash directly
+ * avoids a visible `/team.html` -> `/team.html#/overview` router transition. */
+export const TEAM_URL = `${WEB_APP_URL}/team.html#/overview`;
 
-/** Live organisation Shadow AI activity and policy dashboard. */
-export const SHADOW_DASHBOARD_URL = `${WEB_APP_URL}/shadow.html`;
+/** Live organisation Shadow AI view inside the Business team console. */
+export const SHADOW_DASHBOARD_URL = `${WEB_APP_URL}/team.html#/shadow`;
 
 /** True on the Firefox build (MV2). Auth takes the cookie path here, not the SDK. */
 export const IS_FIREFOX = import.meta.env.BROWSER === 'firefox';

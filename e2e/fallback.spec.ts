@@ -50,6 +50,7 @@ test('fallback guards common inputs on an unsupported site', async ({ context })
 // One payload per secret category, asserted end-to-end through the real engine.
 const SHOULD_FLAG: { name: string; payload: string }[] = [
   { name: 'OpenAI API key', payload: `sk-${'a'.repeat(30)}` },
+  { name: 'email address', payload: 'john.wright@secureintent.ai at 2026-06-08T14:20:00Z' },
   { name: 'credit card (Luhn)', payload: 'card 4597 3579 1372 4576 here' },
   {
     name: 'AWS secret access key (labelled)',
@@ -64,7 +65,6 @@ const SHOULD_PASS: { name: string; payload: string }[] = [
   { name: 'invalid-Luhn card', payload: 'card 4597 3579 1372 4577 here' },
   { name: 'normal sentence', payload: 'Please review the pull request and merge it when ready.' },
   { name: 'UUID', payload: 'request id 550e8400-e29b-41d4-a716-446655440000' },
-  { name: 'email + timestamp', payload: 'john.wright@secureintent.ai at 2026-06-08T14:20:00Z' },
 ];
 
 test('fallback flags each secret category', async ({ context }) => {

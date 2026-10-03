@@ -1,11 +1,14 @@
 import type { ContentScriptContext } from '#imports';
-import { getActiveBundle, getPolicy, isBlockedHost } from '@/lib/config';
-import { acceptTerms, isConsentAccepted } from '@/lib/consent';
-import { compilePatterns, mergeCatalog } from '@/lib/detection';
+import { aiPasteMode, getActiveBundle, getPolicy, isBlockedHost } from '@/lib/config';
+import { configItem } from '@/lib/config/store';
+import { acceptTerms, consentItem, isConsentAccepted } from '@/lib/consent';
+import { compilePatterns, GHOST_EXTRA_PATTERNS, mergeCatalog } from '@/lib/detection';
+import { entitlementItem } from '@/lib/entitlement/store';
 import { createPasteProcessor } from '@/lib/paste/client';
 import { MAX_PASTE_CHARS } from '@/lib/paste/protocol';
+import { recognizeAiPage } from '@/lib/shadow/catalog';
 import { mountConsentGate } from '@/overlay/mountConsentGate';
-import { isEnabled } from '@/settings';
+import { enabledItem, isEnabled } from '@/settings';
 
 const MAX_FILE_BYTES = 4_000_000;
 const MAX_TOTAL_BYTES = 8_000_000;
@@ -26,13 +29,18 @@ function textFile(file: File): boolean {
 type Check = { kind: 'clean' | 'warning' | 'blocked' | 'error'; count: number; message: string };
 
 /** File bytes stay in the browser. One private Worker scans each text file. */
-export async function checkFiles(files: readonly File[], hostname: string): Promise<Check> {
+export async function checkFiles(
+  files: readonly File[],
+  hostname: string,
+  pathname = '/',
+): Promise<Check> {
   const bundle = await getActiveBundle();
   if (!(await isEnabled()) || bundle.killSwitch) {
     return { kind: 'clean', count: 0, message: '' };
   }
   const policy = getPolicy(bundle);
-  if (isBlockedHost(hostname, policy.blockedSites)) {
+  const aiMode = aiPasteMode(policy, recognizeAiPage(hostname, pathname)?.id ?? '');
+  if (isBlockedHost(hostname, policy.blockedSites) || aiMode === 'block_all') {
     return { kind: 'blocked', count: 0, message: 'Your team blocks uploads to this site.' };
   }
   const candidates = files.filter(textFile);
@@ -53,7 +61,7 @@ export async function checkFiles(files: readonly File[], hostname: string): Prom
     bundle.aggressive === false
       ? compiled.filter((pattern) => pattern.validate !== 'entropy')
       : compiled;
-  const wirePatterns = patterns.map(({ regex, ...pattern }) => ({
+  const wirePatterns = [...patterns, ...GHOST_EXTRA_PATTERNS].map(({ regex, ...pattern }) => ({
     ...pattern,
     source: regex.source,
     flags: regex.flags,
@@ -78,7 +86,7 @@ export async function checkFiles(files: readonly File[], hostname: string): Prom
     }
   }
   if (count === 0) return { kind: 'clean', count, message: '' };
-  if (policy.blockInsteadOfWarn) {
+  if (policy.blockInsteadOfWarn || aiMode === 'block_sensitive') {
     return {
       kind: 'blocked',
       count,
@@ -214,6 +222,20 @@ export function installFileGuard(ctx: ContentScriptContext): void {
   const pageState = window as unknown as Record<string, boolean | undefined>;
   if (pageState[FILE_GUARD_FLAG]) return;
   pageState[FILE_GUARD_FLAG] = true;
+  let policyEpoch = 0;
+  const changed = () => {
+    policyEpoch++;
+  };
+  const stopPolicy = configItem.watch(changed);
+  const identityScope = (value: Awaited<ReturnType<typeof entitlementItem.getValue>>) => {
+    const blob = value?.blob;
+    return JSON.stringify([blob?.clerkUserId, blob?.org?.id, blob?.plan, blob?.features]);
+  };
+  const stopIdentity = entitlementItem.watch((value, previous) => {
+    if (identityScope(value) !== identityScope(previous)) changed();
+  });
+  const stopEnabled = enabledItem.watch(changed);
+  const stopConsent = consentItem.watch(changed);
 
   const onChange = (event: Event) => {
     if (replayed.has(event)) return;
@@ -237,9 +259,11 @@ export function installFileGuard(ctx: ContentScriptContext): void {
     input.value = '';
     void (async () => {
       let result: Check;
+      let checkedEpoch = policyEpoch;
       try {
         if (!(await ensureFileConsent(ctx))) return;
-        result = await checkFiles(files, location.hostname);
+        checkedEpoch = policyEpoch;
+        result = await checkFiles(files, location.hostname, location.pathname);
       } catch {
         result = {
           kind: 'error',
@@ -247,8 +271,9 @@ export function installFileGuard(ctx: ContentScriptContext): void {
           message: 'This file could not be checked. Upload was cancelled.',
         };
       }
+      if (checkedEpoch !== policyEpoch) return;
       if (result.kind !== 'clean' && !(await askUser(result))) return;
-      if (!(await ensureFileConsent(ctx))) return;
+      if (!(await ensureFileConsent(ctx)) || checkedEpoch !== policyEpoch) return;
       if (!input.isConnected) return;
       try {
         const transfer = new DataTransfer();
@@ -277,9 +302,11 @@ export function installFileGuard(ctx: ContentScriptContext): void {
     const target = event.target;
     void (async () => {
       let result: Check;
+      let checkedEpoch = policyEpoch;
       try {
         if (!(await ensureFileConsent(ctx))) return;
-        result = await checkFiles(files, location.hostname);
+        checkedEpoch = policyEpoch;
+        result = await checkFiles(files, location.hostname, location.pathname);
       } catch {
         result = {
           kind: 'error',
@@ -287,8 +314,9 @@ export function installFileGuard(ctx: ContentScriptContext): void {
           message: 'This file could not be checked. Drop was cancelled.',
         };
       }
+      if (checkedEpoch !== policyEpoch) return;
       if (result.kind !== 'clean' && !(await askUser(result))) return;
-      if (!(await ensureFileConsent(ctx))) return;
+      if (!(await ensureFileConsent(ctx)) || checkedEpoch !== policyEpoch) return;
       if (!(target instanceof Element) || !target.isConnected) return;
       try {
         const transfer = new DataTransfer();
@@ -313,6 +341,11 @@ export function installFileGuard(ctx: ContentScriptContext): void {
   window.addEventListener('change', onChange, true);
   window.addEventListener('drop', onDrop, true);
   ctx.onInvalidated(() => {
+    policyEpoch++;
+    stopPolicy();
+    stopIdentity();
+    stopEnabled();
+    stopConsent();
     cancelConsentPrompt?.();
     window.removeEventListener('input', onChange, true);
     window.removeEventListener('change', onChange, true);

@@ -157,7 +157,9 @@ export function buildPlanView(input: {
   ];
 
   return {
-    planLabel: PLAN_LABEL[plan],
+    planLabel: plan === 'business_pro' && org?.role === 'org:member'
+      ? 'Developer Pro'
+      : PLAN_LABEL[plan],
     isPro: pro,
     org: org ? { name: org.name ?? 'your team', isAdmin: org.role === 'org:admin' } : null,
     // Clamped: a negative or fractional count could only come from a bug, and

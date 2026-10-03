@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { API_BASE } from '@/lib/api/client';
+import { browser } from '#imports';
 import type { Fingerprint } from '@/lib/fingerprint';
 import { buildEvent, sendTelemetry } from './telemetryService';
 
@@ -66,24 +66,16 @@ const ev = {
 };
 
 describe('sendTelemetry', () => {
-  test('POSTs the event JSON to /v1/telemetry', () => {
-    const fetchMock = vi.fn(() => Promise.resolve(new Response('', { status: 202 })));
-    vi.stubGlobal('fetch', fetchMock);
+  test('passes the event to the background queue', () => {
+    const send = vi.spyOn(browser.runtime, 'sendMessage').mockResolvedValue(undefined);
 
     sendTelemetry(ev);
 
-    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    const [url, init] = call;
-    expect(url).toBe(`${API_BASE}/v1/telemetry`);
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual(ev);
+    expect(send).toHaveBeenCalledWith({ type: 'si-telemetry', event: ev });
   });
 
   test('swallows network errors (fire-and-forget)', () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.reject(new Error('offline'))),
-    );
+    vi.spyOn(browser.runtime, 'sendMessage').mockRejectedValue(new Error('offline'));
     expect(() => sendTelemetry(ev)).not.toThrow();
   });
 });

@@ -12,9 +12,9 @@ export class ShadowApiError extends Error {
  * The Clerk session is the only credential. The body is the event list; the
  * Worker derives the organisation from that session and rejects anything else.
  */
-export async function sendShadowEvents(token: string, events: ShadowEvent[]): Promise<string[]> {
+export async function sendShadowEvents(token: string, events: ShadowEvent[], expectedOrgId?: string): Promise<string[]> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8_000);
+  const timer = setTimeout(() => controller.abort(), 25_000);
   try {
     const response = await fetch(`${API_BASE}/v1/shadow/events`, {
       method: 'POST',
@@ -22,7 +22,7 @@ export async function sendShadowEvents(token: string, events: ShadowEvent[]): Pr
         Authorization: `Bearer ${token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ events }),
+      body: JSON.stringify({ events, expectedOrgId }),
       cache: 'no-store',
       redirect: 'error',
       signal: controller.signal,

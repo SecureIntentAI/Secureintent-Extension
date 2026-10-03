@@ -77,6 +77,42 @@ test('Business policy blocks a sensitive file and a blocked destination', async 
   expect(upload.text).toHaveBeenCalledTimes(1);
 });
 
+test('per-service block all rejects a text upload before reading it', async () => {
+  vi.mocked(getActiveBundle).mockResolvedValue({
+    ...DEFAULT_BUNDLE,
+    policy: {
+      blockInsteadOfWarn: false,
+      requireSessionLock: false,
+      blockedSites: [],
+      aiServices: [{ serviceId: 'chatgpt', classification: 'review', pasteMode: 'block_all' }],
+    },
+  });
+  const upload = file('notes.txt', 'ordinary text');
+  expect(await checkFiles([upload], 'chatgpt.com')).toMatchObject({ kind: 'blocked', count: 0 });
+  expect(upload.text).not.toHaveBeenCalled();
+});
+
+test('per-service block sensitive rejects a detected file and permits clean text', async () => {
+  vi.mocked(getActiveBundle).mockResolvedValue({
+    ...DEFAULT_BUNDLE,
+    policy: {
+      blockInsteadOfWarn: false,
+      requireSessionLock: false,
+      blockedSites: [],
+      aiServices: [
+        { serviceId: 'chatgpt', classification: 'review', pasteMode: 'block_sensitive' },
+      ],
+    },
+  });
+  expect(
+    await checkFiles([file('notes.txt', 'sk-' + 'a'.repeat(30))], 'chatgpt.com'),
+  ).toMatchObject({ kind: 'blocked', count: 1 });
+  expect(await checkFiles([file('notes.txt', 'ordinary text')], 'chatgpt.com')).toMatchObject({
+    kind: 'clean',
+    count: 0,
+  });
+});
+
 test('Business custom patterns are applied to files', async () => {
   vi.mocked(getActiveBundle).mockResolvedValue({
     ...DEFAULT_BUNDLE,

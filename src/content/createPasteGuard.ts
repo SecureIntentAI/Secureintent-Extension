@@ -76,19 +76,9 @@ function editableText(el: HTMLElement): string {
   return range.toString();
 }
 
-function expectedEditableText(
-  el: HTMLElement,
-  selection: Selection,
-  text: string,
-): string | null {
+function expectedEditableText(el: HTMLElement, selection: Selection, text: string): string | null {
   const { anchorNode, anchorOffset, focusNode, focusOffset } = selection;
-  if (
-    !anchorNode ||
-    !focusNode ||
-    !el.contains(anchorNode) ||
-    !el.contains(focusNode)
-  )
-    return null;
+  if (!anchorNode || !focusNode || !el.contains(anchorNode) || !el.contains(focusNode)) return null;
 
   const offsetOf = (node: Node, offset: number) => {
     const range = document.createRange();
@@ -213,6 +203,18 @@ function claimShadowVisit(): boolean {
   return true;
 }
 
+function isSecureIntentAuthenticationPage(): boolean {
+  const host = location.hostname.toLowerCase();
+  const ownHost = host === 'secureintent.ai' || host === 'www.secureintent.ai';
+  const localPreview = host === '127.0.0.1' || host === 'localhost';
+  if (!ownHost && !localPreview) return false;
+  return [
+    '/account.html',
+    '/business_promo.html',
+    '/lifetime_business_promo.html',
+  ].includes(location.pathname);
+}
+
 export async function createPasteGuard(
   ctx: ContentScriptContext,
   config: SiteConfig,
@@ -241,10 +243,10 @@ export async function createPasteGuard(
     return { input, path, text, selection: captureSelection(input) };
   };
   const routePaste = (event: Event, text: string) => {
+    if (isSecureIntentAuthenticationPage()) return;
     if (processPaste) {
       if (isFallback && dedicatedActive()) return;
-      void processPaste(event);
-      return;
+      return processPaste(event);
     }
     const captured = captureEarly(event, text);
     if (captured) startupQueue.push(captured);
@@ -256,7 +258,7 @@ export async function createPasteGuard(
       const e = event as ClipboardEvent;
       if (!e.isTrusted || (isFallback && dedicatedActive())) return;
       const text = readClipboardText(e.clipboardData);
-      if (text) routePaste(event, text);
+      if (text) return routePaste(event, text);
     },
     { capture: true },
   );
@@ -275,7 +277,7 @@ export async function createPasteGuard(
         preventDefault: () => e.preventDefault(),
         stopImmediatePropagation: () => e.stopImmediatePropagation(),
       } as unknown as ClipboardEvent;
-      routePaste(shim, text);
+      return routePaste(shim, text);
     },
     { capture: true },
   );
@@ -452,9 +454,10 @@ export async function createPasteGuard(
   const aiPage =
     window.top === window ? recognizeAiPage(location.hostname, location.pathname) : undefined;
   let demoRules = SHADOW_DEMO ? await demoPolicyItem.getValue().catch(() => []) : [];
-  const currentAiMode = () => SHADOW_DEMO
-    ? aiPasteMode({ ...policy, aiServices: demoRules }, aiPage?.id)
-    : aiPasteMode(policy, aiPage?.id);
+  const currentAiMode = () =>
+    SHADOW_DEMO
+      ? aiPasteMode({ ...policy, aiServices: demoRules }, aiPage?.id)
+      : aiPasteMode(policy, aiPage?.id);
   let aiMode = currentAiMode();
   let aiBlocked = aiMode === 'block_all';
   let destinationBlocked = policyBlockedHost || aiBlocked;
@@ -519,11 +522,7 @@ export async function createPasteGuard(
 
   // Vault access is origin-bound by the background and expiry checked per read.
 
-  const onPaste = async (
-    event: Event,
-    captured?: CapturedPaste,
-    ownsFallbackEvent = false,
-  ) => {
+  const onPaste = async (event: Event, captured?: CapturedPaste, ownsFallbackEvent = false) => {
     const e = event as ClipboardEvent;
     let job: PasteJob | undefined;
     const intercept = () => {
@@ -663,6 +662,7 @@ export async function createPasteGuard(
       // "keep tokens" must not become an unchecked route for those secrets.
       if (
         allowRawPaste &&
+        aiMode !== 'block_sensitive' &&
         scan.total === 0 &&
         hasFeatureCached('rehydrate') &&
         TOKEN_RE.test(text)

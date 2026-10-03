@@ -1,4 +1,4 @@
-import { postJson } from '@/lib/api/client';
+import { browser } from '#imports';
 import type { TelemetryAction, TelemetryDetection, TelemetryEvent } from '@/lib/telemetry/types';
 
 export function buildEvent(input: {
@@ -18,5 +18,8 @@ export function buildEvent(input: {
 }
 
 export function sendTelemetry(event: TelemetryEvent): void {
-  postJson('/v1/telemetry', event);
+  // The background owns all delivery, including Free telemetry. It takes the
+  // destination hostname from the browser sender and retains failed sends for
+  // retry; content scripts never hold an account credential.
+  void browser.runtime.sendMessage({ type: 'si-telemetry', event }).catch(() => {});
 }

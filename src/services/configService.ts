@@ -1,3 +1,4 @@
+import { getActiveEntitlement } from '@/lib/entitlement';
 import { getJson } from '@/lib/api/client';
 import { shouldAcceptBundle } from '@/lib/config/freshness';
 import { configItem, saveBundle } from '@/lib/config/store';
@@ -40,6 +41,7 @@ async function authHeaders(): Promise<{
 export async function syncConfig(): Promise<SyncResult> {
   const request = ++syncRevision;
   try {
+    const expectedOrg = (await getActiveEntitlement()).org?.id ?? null;
     const { headers, authenticated } = await authHeaders();
     const { bundle, signature } = await getJson<{ bundle: unknown; signature: string | null }>(
       '/v1/config',
@@ -55,6 +57,10 @@ export async function syncConfig(): Promise<SyncResult> {
       return { status: 'error', error: 'signature verification failed' };
     }
 
+    const currentOrg = (await getActiveEntitlement()).org?.id ?? null;
+    if (currentOrg !== expectedOrg || (incoming.policy?.orgId ?? null) !== expectedOrg) {
+      return { status:'error',error:'policy organization mismatch' };
+    }
     const current = await configItem.getValue();
     if (request !== syncRevision) return { status: 'unchanged', version: current?.version };
     if (!shouldAcceptBundle(current, incoming, authenticated)) {
