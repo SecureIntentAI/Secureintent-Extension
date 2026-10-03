@@ -48,7 +48,7 @@ export type ShadowPolicy = {
     pasteBlocked?: boolean;
   }[];
 };
-/** A real Clerk organisation seat. Discovery does not run for any other plan. */
+/** A verified Business organisation seat. Discovery does not run for any other plan. */
 export type DiscoverySeat = {
   plan: string;
   orgId: string | null;
@@ -68,7 +68,7 @@ export const emptyVisitState = (): VisitState => ({
   error: null,
 });
 
-const ORG_ID = /^org_[A-Za-z0-9]{1,60}$/;
+const ORG_ID = /^(?:org_[A-Za-z0-9]{1,60}|org_si_[a-f0-9]{32})$/;
 
 export function canDiscover(seat: DiscoverySeat | null): boolean {
   return !!seat && seat.plan === 'business_pro' && !!seat.orgId && ORG_ID.test(seat.orgId);

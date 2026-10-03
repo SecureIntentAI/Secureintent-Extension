@@ -10,7 +10,7 @@ import { withDeadline } from '@/lib/async';
 import { getClerkToken } from './entitlementBackground';
 
 let pending: Promise<void> | undefined;
-async function report(): Promise<void> {
+async function report(confirmAfterSync = true): Promise<void> {
   if (!(await isConsentAccepted())) return;
   const entitlement = await getActiveEntitlement();
   if (!entitlement.org) return;
@@ -43,7 +43,14 @@ async function report(): Promise<void> {
     return result.policyVersion;
   });
   await browser.storage.local.set({si_business_connection_status:{at:Date.now(),status:'reported'}});
-  if(serverVersion>version) await syncConfig();
+  if(serverVersion>version && confirmAfterSync) {
+    await syncConfig();
+    const updated = await configItem.getValue();
+    // The first receipt described the old revision. Report again once the
+    // signed bundle has been saved so the admin sees the new guard state now,
+    // rather than waiting for the next minute alarm.
+    if(updated?.policy?.orgId===orgId && (updated.policyVersion ?? 0)>version) await report(false);
+  }
 }
 
 export function reportBusinessConnection(): Promise<void> {

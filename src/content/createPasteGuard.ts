@@ -218,7 +218,11 @@ function isSecureIntentAuthenticationPage(): boolean {
   const ownHost = host === 'secureintent.ai' || host === 'www.secureintent.ai';
   const localPilot = host === '127.0.0.1' || host === 'localhost';
   if (!ownHost && !localPilot) return false;
-  return ['/account.html', '/business_promo.html'].includes(location.pathname);
+  return [
+    '/account.html',
+    '/business_promo.html',
+    '/lifetime_business_promo.html',
+  ].includes(location.pathname);
 }
 
 export async function createPasteGuard(
@@ -682,6 +686,9 @@ export async function createPasteGuard(
       // "keep tokens" must not become an unchecked route for those secrets.
       if (
         allowRawPaste &&
+        // Restoring a token materializes the original secret after the scan.
+        // Treat that as a sensitive paste under a destination's block rule.
+        aiMode !== 'block_sensitive' &&
         scan.total === 0 &&
         hasFeatureCached('rehydrate') &&
         TOKEN_RE.test(text)

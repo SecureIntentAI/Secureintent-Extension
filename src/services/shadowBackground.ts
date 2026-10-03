@@ -191,20 +191,36 @@ async function flush(): Promise<void> {
   const batch = queue.slice(0, 25);
   try {
     const ids = await sendShadowEvents(token, batch, who.orgId!);
+    if (!ids.length) {
+      await save({ ...state, error: 'Shadow AI report was not acknowledged; retry pending.' });
+      return;
+    }
     await save({
       ...state,
       queue: queue.filter((event) => !ids.includes(event.eventId)),
       lastSync: Date.now(),
-      error: null,
+      error: ids.length === batch.length ? null : 'Some Shadow AI reports remain queued for retry.',
     });
   } catch (error) {
     if (error instanceof ShadowApiError && error.status === 400) {
-      await save({
-        ...state,
-        queue: queue.slice(batch.length),
-        dropped: state.dropped + batch.length,
-        error: 'Rejected Shadow AI batch discarded.',
-      });
+      // The server rejects a batch atomically. Probe only its first event:
+      // preserve the other 24 instead of losing valid activity alongside one
+      // malformed or stale event. The next alarm advances through the queue.
+      const first = batch[0];
+      try {
+        const ids = await sendShadowEvents(token, [first], who.orgId!);
+        await save(ids.includes(first.eventId)
+          ? { ...state, queue: queue.filter((event) => event.eventId !== first.eventId),
+              lastSync: Date.now(), error: 'Remaining Shadow AI reports queued for retry.' }
+          : { ...state, error: 'Shadow AI report was not acknowledged; retry pending.' });
+      } catch (singleError) {
+        if (singleError instanceof ShadowApiError && singleError.status === 400) {
+          await save({ ...state, queue: queue.filter((event) => event.eventId !== first.eventId),
+            dropped: state.dropped + 1, error: 'One invalid Shadow AI event discarded; remaining reports queued.' });
+        } else {
+          await save({ ...state, error: 'Shadow AI report queued for retry.' });
+        }
+      }
       return;
     }
     await save({ ...state, error: 'Shadow AI report queued for retry.' });
