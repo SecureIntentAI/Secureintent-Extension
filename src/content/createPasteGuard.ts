@@ -40,6 +40,7 @@ import { mountConsentGate } from '@/overlay/mountConsentGate';
 import { mountPasteStatus, type PasteStatus } from '@/overlay/mountPasteStatus';
 import { buildEvent, sendTelemetry } from '@/services/telemetryService';
 import { enabledItem, isEnabled, recordBlocked } from '@/settings';
+import { isDraftEditor, pasteIntoDraft } from './draftEditorPaste';
 import { findComposer } from './findComposer';
 import { readClipboardText } from './readClipboard';
 import type { SiteConfig } from './types';
@@ -122,7 +123,13 @@ function captureSelection(input: HTMLElement): CapturedPaste['selection'] {
   return undefined;
 }
 
-function insertText(el: HTMLElement, text: string, selection?: PasteJob['selection']): void {
+function insertText(
+  el: HTMLElement,
+  text: string,
+  selection?: PasteJob['selection'],
+  isCurrent: () => boolean = () => el.isConnected,
+  applyInsertion: (action: () => boolean) => boolean = (action) => action(),
+): void | Promise<void> {
   el.focus();
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     const start = selection && 'start' in selection ? selection.start : el.selectionStart;
@@ -133,7 +140,7 @@ function insertText(el: HTMLElement, text: string, selection?: PasteJob['selecti
     }
     const expected = el.value.slice(0, start) + text + el.value.slice(end);
     el.setSelectionRange(start, end);
-    document.execCommand('insertText', false, text);
+    applyInsertion(() => document.execCommand('insertText', false, text));
     if (el.value !== expected) throw new Error('The editor did not accept the checked text');
     return;
   }
@@ -155,6 +162,7 @@ function insertText(el: HTMLElement, text: string, selection?: PasteJob['selecti
   if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) {
     throw new Error('The editor selection could not be restored');
   }
+  if (isDraftEditor(el)) return pasteIntoDraft(el, text, isCurrent, applyInsertion);
   const expected = expectedEditableText(el, sel, text);
   if (expected === null) throw new Error('The editor selection could not be checked');
 
@@ -166,8 +174,10 @@ function insertText(el: HTMLElement, text: string, selection?: PasteJob['selecti
     try {
       const dt = new DataTransfer();
       dt.setData('text/plain', text);
-      handled = !slate.dispatchEvent(
-        new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
+      handled = !applyInsertion(() =>
+        slate.dispatchEvent(
+          new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
+        ),
       );
     } catch {
       // Clipboard event support can vary; try the browser insertion path.
@@ -180,7 +190,7 @@ function insertText(el: HTMLElement, text: string, selection?: PasteJob['selecti
     }
   }
 
-  const inserted = document.execCommand('insertText', false, text);
+  const inserted = applyInsertion(() => document.execCommand('insertText', false, text));
   if (el.isContentEditable) {
     if (editableText(el) !== expected) {
       throw new Error('The editor did not accept the checked text');
@@ -388,7 +398,13 @@ export async function createPasteGuard(
         if (!enabled || bundle.killSwitch) {
           if (captured.rejection) continue;
           try {
-            insertText(captured.input, captured.text, captured.selection);
+            await insertText(
+              captured.input,
+              captured.text,
+              captured.selection,
+              () =>
+                !disposed && captured.pageUrl === location.href && (!enabled || bundle.killSwitch),
+            );
           } catch (error) {
             siError(config.name, 'startup paste could not be restored', error);
           }
@@ -421,14 +437,24 @@ export async function createPasteGuard(
       await failed(job, error);
     }
   };
-  const insert = (job: PasteJob, text: string) => {
+  const insert = async (job: PasteJob, text: string) => {
     if (!live(job) || !job.input.isConnected) return;
-    job.inserting = true;
-    try {
-      insertText(job.input, text, job.selection);
-    } finally {
-      job.inserting = false;
-    }
+    await insertText(
+      job.input,
+      text,
+      job.selection,
+      () => live(job),
+      (action) => {
+        // Suppress cancellation only during our own synchronous editor event;
+        // user edits during Draft's asynchronous selection/render wait cancel it.
+        job.inserting = true;
+        try {
+          return action();
+        } finally {
+          job.inserting = false;
+        }
+      },
+    );
   };
   ctx.addEventListener(window, 'keydown', (event) => {
     if ((event as KeyboardEvent).key === 'Escape' && active) finish(active);
@@ -785,8 +811,8 @@ export async function createPasteGuard(
                     );
                     const restored = await processor.request('rehydrate', fresh);
                     if (!restored.tokenCount) throw new Error('Restoration tokens expired');
-                    if (hasFeatureCached('rehydrate')) insert(pending, restored.text);
-                  } else if (action === 'paste') insert(pending, text); // keep tokens as-is
+                    if (hasFeatureCached('rehydrate')) await insert(pending, restored.text);
+                  } else if (action === 'paste') await insert(pending, text); // keep tokens as-is
                   // cancel → drop the paste entirely
                   siDebug(config.name, 'rehydrate prompt', { action, tokens: known });
                 }),
@@ -907,7 +933,7 @@ export async function createPasteGuard(
                 // way. Under a block the paste is simply dropped (= cancel).
                 if (action === 'paste') {
                   if (allowRawPaste) {
-                    insert(pending, text);
+                    await insert(pending, text);
                     pending.reportOutcome?.('warning_bypassed');
                   }
                 } else if (
@@ -921,7 +947,7 @@ export async function createPasteGuard(
                   if (!live(pending)) return;
                   const sanitized = await processor.request('sanitize', null);
                   if (hasFeatureCached('ghost') && live(pending)) {
-                    insert(pending, sanitized);
+                    await insert(pending, sanitized);
                     pending.reportOutcome?.('sanitised');
                   }
                 } else if (action === 'redact' && proAction && !destinationBlocked) {
@@ -943,7 +969,7 @@ export async function createPasteGuard(
                   // token→secret map so a later paste can rehydrate them.
                   await storeVaultEntries(entries);
                   if (!live(pending)) return;
-                  insert(pending, masked);
+                  await insert(pending, masked);
                   pending.reportOutcome?.('sanitised');
                 }
                 notifyAction({ ...featureCtx, action }); // pro: audit log / team report
