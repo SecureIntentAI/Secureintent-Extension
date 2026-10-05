@@ -81,7 +81,8 @@ export default defineConfig({
       ],
       // Privileged access to our Worker so the background config sync + content-script
       // telemetry fetches bypass page CORS, plus the Clerk Frontend API for auth.
-      host_permissions: [
+      // De-duplicated: a production WXT_WEB_APP_URL already appears below.
+      host_permissions: [...new Set([
         'https://api.secureintent.ai/*',
         // Sync Host — the web app whose Clerk session the extension mirrors.
         'https://secureintent.ai/*',
@@ -92,7 +93,7 @@ export default defineConfig({
         'http://*/*',
         'https://*/*',
         ...localHosts,
-      ],
+      ])],
       // Firefox-only: AMO requires a stable add-on id, a minimum-version floor
       // (storage.session needs FF 115+), and — for all new add-ons — the
       // data_collection_permissions key. Core protection collects nothing

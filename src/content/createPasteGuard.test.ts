@@ -302,8 +302,9 @@ describe('createPasteGuard', () => {
     expect(event.preventDefault).toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
     expect(mountOverlayMock).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
-    mountPasteStatusMock.mock.calls.at(-1)![2]();
+    // No blocking dialog (product decision): the failure is logged and the
+    // paste released, so the next paste is checked straight away.
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(1);
   });
@@ -556,8 +557,9 @@ describe('createPasteGuard', () => {
     vi.mocked(consumeAnonymize).mockResolvedValueOnce(false);
     await lastOnAction()('redact');
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
-    mountPasteStatusMock.mock.calls.at(-1)![2]();
+    // No blocking dialog (product decision): the failure is logged and the
+    // paste released, so the next paste is checked straight away.
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
@@ -572,8 +574,9 @@ describe('createPasteGuard', () => {
     await lastOnAction()('redact');
     expect(consumeAnonymize).not.toHaveBeenCalled();
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
-    mountPasteStatusMock.mock.calls.at(-1)![2]();
+    // No blocking dialog (product decision): the failure is logged and the
+    // paste released, so the next paste is checked straight away.
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
     await t.firePaste(t.makeEvent(SECRET));
     expect(mountOverlayMock).toHaveBeenCalledTimes(2);
   });
@@ -1120,7 +1123,7 @@ describe('createPasteGuard', () => {
     expect(e.preventDefault).toHaveBeenCalled();
 
     expect(document.execCommand).not.toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)?.[1]).toBe('error');
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
   });
 });
 
@@ -1490,6 +1493,42 @@ describe('fallback guard (catch-all)', () => {
       firePaste: () => handlers.paste?.(e),
     };
   }
+
+  test('a clean paste into an email field lands (no selection API on type=email)', async () => {
+    const handlers: Record<string, (e: unknown) => unknown> = {};
+    const ctx = { addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => { handlers[type] = cb; } };
+    const input = document.createElement('input');
+    input.type = 'email';
+    document.body.appendChild(input);
+    expect(input.selectionStart).toBeNull(); // the condition that used to throw
+    document.execCommand = vi.fn((command: string, _ui?: boolean, value?: string) => {
+      if (command === 'insertText') input.value += value ?? '';
+      return true;
+    }) as typeof document.execCommand;
+    const e = { target: input, isTrusted: true, clipboardData: { getData: () => 'kaushik.raj' }, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), composedPath: () => composedPathFrom(input) };
+    await createPasteGuard(ctx as never, { name: 'example.com', siteKey: 'fallback' });
+    await handlers.paste?.(e);
+    await vi.waitFor(() => expect(input.value).toBe('kaushik.raj'));
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
+  });
+
+  test('an editor that rejects the insertion releases the paste quietly (no blocking dialog)', async () => {
+    const handlers: Record<string, (e: unknown) => unknown> = {};
+    const ctx = { addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => { handlers[type] = cb; } };
+    const input = document.createElement('input');
+    input.type = 'email';
+    document.body.appendChild(input);
+    document.execCommand = vi.fn(() => false) as typeof document.execCommand; // editor ignores it
+    const make = () => ({ target: input, isTrusted: true, clipboardData: { getData: () => 'plain words' }, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), composedPath: () => composedPathFrom(input) });
+    await createPasteGuard(ctx as never, { name: 'example.com', siteKey: 'fallback' });
+    await handlers.paste?.(make());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mountPasteStatusMock.mock.calls.some((call) => call[1] === 'error')).toBe(false);
+    // Released: the next paste is processed rather than queued behind a dialog.
+    const calls = vi.mocked(document.execCommand).mock.calls.length;
+    await handlers.paste?.(make());
+    await vi.waitFor(() => expect(vi.mocked(document.execCommand).mock.calls.length).toBeGreaterThan(calls));
+  });
 
   test('blocks a secret on an unsupported site (no dedicated guard present)', async () => {
     const t = setupFallback();

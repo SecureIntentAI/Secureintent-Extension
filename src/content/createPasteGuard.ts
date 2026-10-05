@@ -75,6 +75,15 @@ interface PasteJob {
   reportOutcome?: (action: DlpAction) => void;
 }
 
+/**
+ * Rich editors legitimately change whitespace: a pasted "\n" becomes a new
+ * paragraph (which Range.toString() reports as nothing) and spaces become
+ * non-breaking spaces. Confirm the inserted characters, in order, and ignore
+ * how the editor laid out the whitespace between them.
+ */
+const sameText = (actual: string, expected: string): boolean =>
+  actual.replace(/[\s\u00a0\u200b\ufeff]+/g, '') === expected.replace(/[\s\u00a0\u200b\ufeff]+/g, '');
+
 function editableText(el: HTMLElement): string {
   const range = document.createRange();
   range.selectNodeContents(el);
@@ -134,7 +143,17 @@ function insertText(
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     const start = selection && 'start' in selection ? selection.start : el.selectionStart;
     const end = selection && 'end' in selection ? selection.end : el.selectionEnd;
-    if (start === null || end === null) throw new Error('The editor selection is unavailable');
+    if (start === null || end === null) {
+      // type=email/number expose no selection API. The browser still keeps the
+      // caret, so insert there and confirm the text landed. (These types also
+      // sanitize the value, e.g. drop line breaks, hence the loose comparison.)
+      const before = el.value;
+      applyInsertion(() => document.execCommand('insertText', false, text));
+      const compact = (v: string) => v.replace(/[\s\u00a0]+/g, '');
+      if (el.value === before || !compact(el.value).includes(compact(text)))
+        throw new Error('The editor did not accept the checked text');
+      return;
+    }
     if (start < 0 || end < start || end > el.value.length) {
       throw new Error('The saved paste position is no longer valid');
     }
@@ -183,7 +202,7 @@ function insertText(
       // Clipboard event support can vary; try the browser insertion path.
     }
     if (handled) {
-      if (editableText(el) !== expected) {
+      if (!sameText(editableText(el), expected)) {
         throw new Error('The editor did not accept the checked text');
       }
       return;
@@ -192,7 +211,7 @@ function insertText(
 
   const inserted = applyInsertion(() => document.execCommand('insertText', false, text));
   if (el.isContentEditable) {
-    if (editableText(el) !== expected) {
+    if (!sameText(editableText(el), expected)) {
       throw new Error('The editor did not accept the checked text');
     }
   } else if (!inserted) {
@@ -371,14 +390,12 @@ export async function createPasteGuard(
   };
   const status = (job: PasteJob, kind: PasteStatus) =>
     present(job, () => mountPasteStatus(ctx, kind, () => finish(job)));
-  const failed = async (job: PasteJob, error: unknown) => {
+  const failed = (job: PasteJob, error: unknown) => {
     if (!live(job)) return;
     siError(config.name, 'paste operation failed; insertion was not confirmed', error);
-    try {
-      await status(job, 'error');
-    } catch {
-      finish(job);
-    }
+    // Keep the failure available in the console for diagnosis without showing
+    // the alarming modal. Release the job so later pastes are not held up.
+    finish(job);
   };
   async function drainStartupQueue() {
     if (disposed || !processPaste || drainingStartupQueue || active) return;
