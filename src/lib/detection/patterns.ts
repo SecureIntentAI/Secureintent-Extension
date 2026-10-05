@@ -212,6 +212,19 @@ export const PATTERNS: Pattern[] = [
     regex: /\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/gi,
     validate: 'iban',
   },
+  {
+    // Internal keys named like keys (sk_, api_live_, secret_, tok_test_...)
+    // but shorter than the 32-character entropy rules. The value must mix
+    // capitals, lowercase and digits, and either carry two digits or no run of
+    // four lowercase letters, so code names (api_V1GetUserProfile) don't match.
+    // `env-credential`, not `known-key`: no provider format was recognised.
+    // Publishable pk_ keys stay out on purpose.
+    type: 'env-credential',
+    label: 'Possible API key',
+    regex:
+      /\b(?:sk|rk|ak|api|key|secret|tok|token|access|client)(?:_(?:live|test|prod|dev))?_(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[0-9])(?=(?:[A-Za-z]*[0-9]){2}|(?![A-Za-z0-9]*[a-z]{4}))[A-Za-z0-9]{14,64}\b/g,
+    validate: 'entropy',
+  },
   // Aggressive: unknown/zero-day secrets by entropy. Gated by bundle.aggressive.
   {
     type: 'high-entropy',

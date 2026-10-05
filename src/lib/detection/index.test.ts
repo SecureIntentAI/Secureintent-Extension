@@ -437,3 +437,40 @@ describe('detectSecrets — personal data inside a credential', () => {
     expect(dets.map((d) => d.type).sort()).toEqual(['known-key', 'pii']);
   });
 });
+
+describe('Possible API key (short prefixed internal keys)', () => {
+  const labels = (text: string) => detectSecrets(text).map((d) => d.label);
+  test.each([
+    'sk_live_8Qm4Zp7Lx2Vr9Nk5',
+    'api_3Fv8Kq1Tz6Mn4Rw9',
+    'key_prod_6Tr9Wm2Xq4Zn7Lp',
+    'ak_5Nv8Qx3Kj7Rm2Tc9',
+    'api_live_9Lp4Vx7Qm2Kr8Nd5',
+    'secret_3Zq7Wn5Mx9Tp2Lf8',
+    'tok_test_8Km2Rz6Vq4Xp9Nd',
+    'client_7Qx5Lm9Kr2Vn8Tc4',
+    'access_4Wp9Zk6Xq3Mn7Lv2',
+  ])('catches %s on its own line', (key) => {
+    expect(labels(`3. ${key}`)).toEqual(['Possible API key']);
+  });
+
+  test.each([
+    'pk_test_B9x2Lm7Qv5Kp8Hd3', // publishable by design
+    'api_V1GetUserProfileById', // code names
+    'access_tokenUrlForOAuth2',
+    'client_secretManagerV2',
+    'api_version_2024_10_01',
+    'key_ABCDEFGHIJKLMNOP1',
+    'Set the access_token value, then call api_v2 with key rotation every 30 days.',
+  ])('leaves %s alone', (text) => {
+    expect(labels(text)).toEqual([]);
+  });
+
+  test('a recognised provider format keeps its own name', () => {
+    expect(labels('sk_live_51Hx8Qm4Zp7Lx2Vr9Nk5Tc4Wp9Zk6')).toEqual(['Stripe key']);
+  });
+
+  test('is skipped inside links, like the other random-string rules', () => {
+    expect(labels('https://example.com/share/api_3Fv8Kq1Tz6Mn4Rw9')).toEqual([]);
+  });
+});
