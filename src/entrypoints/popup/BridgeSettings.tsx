@@ -84,7 +84,7 @@ export function BridgeSettings() {
             Requires a desktop app supporting secure pairing v2. Older versions cannot pair.
           </p>
           <label className="si-lockcfg-hint" htmlFor="si-bridge-token">
-            Pairing token — copy it from the desktop app’s dashboard
+            Pairing token: copy it from the desktop app’s dashboard
           </label>
           <div className="si-lockcfg-row">
             <input
@@ -108,7 +108,7 @@ export function BridgeSettings() {
         {!enabled
           ? 'If you also run the SecureIntent desktop app, pair them so one copy isn’t flagged twice.'
           : paired
-            ? 'Paired. Shares the site you’re on — never the page — with the app on this machine.'
+            ? 'Paired. Shares the site you’re on (never the page) with the app on this machine.'
             : 'Add the token from the desktop app to finish pairing. Nothing is shared until you do.'}
       </p>
     </section>

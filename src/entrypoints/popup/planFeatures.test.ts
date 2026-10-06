@@ -11,7 +11,7 @@ const usage = (remaining: number, limit = 10): QuotaStatus => ({
 const unlimited: QuotaStatus = { used: 0, remaining: -1, limit: 10, unlimited: true };
 
 const TOOLKIT = ['rehydrate', 'ghost', 'session_lock'];
-const TEAM = ['team_policy', 'team_alerts'];
+const TEAM = ['team_policy'];
 const AUGUST = Date.parse('2026-08-09T12:00:00Z');
 
 describe('buildPlanView', () => {
@@ -39,12 +39,12 @@ describe('buildPlanView', () => {
     expect(toolkit.every((r) => r.state === 'active' && r.detail === 'Active')).toBe(true);
   });
 
-  // P1-15: both team features ship today, so nothing may present them as future work.
+  // P1-15: Team Policy Sync ships today, so nothing may present it as future work.
   it('business_pro gets the team features as included, not "Soon"', () => {
     const v = buildPlanView({ plan: 'business_pro', pro: true, quota: unlimited });
     expect(v.planLabel).toBe('Business Pro');
     const team = v.rows.filter((r) => TEAM.includes(r.key));
-    expect(team).toHaveLength(2);
+    expect(team).toHaveLength(1);
     expect(team.every((r) => r.state === 'active' && r.detail === 'Active')).toBe(true);
   });
 
@@ -52,16 +52,19 @@ describe('buildPlanView', () => {
     for (const plan of ['developer', 'developer_pro'] as const) {
       const v = buildPlanView({ plan, pro: plan !== 'developer', quota: unlimited });
       const team = v.rows.filter((r) => TEAM.includes(r.key));
-      expect(team).toHaveLength(2);
+      expect(team).toHaveLength(1);
       // A Developer Pro user already has Pro, so "Pro" would be a dead end here.
       expect(team.every((r) => r.state === 'locked' && r.detail === 'Business')).toBe(true);
     }
   });
 
-  it('no row on any plan is labelled as upcoming', () => {
+  // Product decision (Oct 2026): alerts arrive with the desktop app. It is the
+  // only upcoming row, and it reads the same on every plan.
+  it('only Security-Team Alerts is upcoming, on every plan', () => {
     for (const plan of ['developer', 'developer_pro', 'business_pro'] as const) {
       const v = buildPlanView({ plan, pro: plan !== 'developer', quota: usage(3) });
-      expect(v.rows.some((r) => r.detail === 'Soon')).toBe(false);
+      expect(v.rows.filter((r) => r.state === 'soon').map((r) => r.key)).toEqual(['team_alerts']);
+      expect(v.rows.find((r) => r.key === 'team_alerts')).toMatchObject({ detail: 'Coming soon' });
     }
   });
 

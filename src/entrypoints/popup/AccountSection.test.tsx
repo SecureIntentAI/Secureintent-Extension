@@ -90,6 +90,17 @@ describe('AccountSection — Chrome (Clerk SDK)', () => {
     expect(screen.queryByText('Shadow AI')).toBeNull();
   });
 
+  test('the Manage team row names the organisation and its seats', async () => {
+    const admin = seat('org:admin');
+    vi.mocked(getActiveEntitlement).mockResolvedValue({
+      ...admin,
+      org: { id: 'org_1', name: 'Acme Corp', role: 'org:admin', seats: 150 },
+    });
+    render(<AccountSection />);
+    expect(await screen.findByText('Manage team')).toBeTruthy();
+    expect(screen.getByText('Acme Corp · 150 seats')).toBeTruthy();
+  });
+
   test('Manage team opens the canonical overview route directly', async () => {
     vi.spyOn(fakeBrowser.tabs, 'create');
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:admin'));

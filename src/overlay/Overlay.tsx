@@ -187,14 +187,14 @@ export function Overlay({
 
         {blockRawPaste && (
           <p className="si-policy-note">
-            Your team's policy blocks pasting secrets — anonymise it or cancel.
+            Your team's policy blocks pasting secrets. Anonymise it or cancel.
           </p>
         )}
 
         {!pro && quotaExhausted && (
           <p className="si-quota-note">
             You've used all {quotaExhausted.limit} free Anonymise &amp; Paste this month. Your
-            allowance comes back on <b>{quotaExhausted.resetsOn}</b> (UTC) — Pro is unlimited.
+            allowance comes back on <b>{quotaExhausted.resetsOn}</b> (UTC). Pro is unlimited.
           </p>
         )}
 
@@ -437,7 +437,7 @@ function GhostSummaryView({
 
         {blockRawPaste && (
           <p className="si-policy-note">
-            Your team's policy blocks pasting secrets — sanitize it or cancel.
+            Your team's policy blocks pasting secrets. Sanitize it or cancel.
           </p>
         )}
 

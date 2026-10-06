@@ -3,7 +3,12 @@ import { abortable } from '@/lib/async';
 import { aiPasteMode, getActiveBundle, getPolicy, isBlockedHost } from '@/lib/config';
 import { configItem } from '@/lib/config/store';
 import { acceptTerms, consentItem, consentSatisfied, isConsentAccepted } from '@/lib/consent';
-import { compilePatterns, GHOST_EXTRA_PATTERNS, mergeCatalog } from '@/lib/detection';
+import {
+  compilePatterns,
+  GHOST_EXTRA_PATTERNS,
+  mergeCatalog,
+  teamPatternsOnly,
+} from '@/lib/detection';
 import { entitlementItem } from '@/lib/entitlement/store';
 import { createPasteProcessor } from '@/lib/paste/client';
 import { MAX_PASTE_CHARS } from '@/lib/paste/protocol';
@@ -92,12 +97,14 @@ export async function checkFiles(
       message: 'Too many files or a text file is too large to check safely.',
     };
   }
-  const compiled = mergeCatalog(compilePatterns(bundle.patterns));
+  const remote = compilePatterns(bundle.patterns);
+  const compiled = mergeCatalog(remote);
   const patterns =
     bundle.aggressive === false
       ? compiled.filter((pattern) => pattern.validate !== 'entropy')
       : compiled;
-  const wirePatterns = [...patterns, ...GHOST_EXTRA_PATTERNS].map(({ regex, ...pattern }) => ({
+  const extra = teamPatternsOnly(remote) ? [] : GHOST_EXTRA_PATTERNS;
+  const wirePatterns = [...patterns, ...extra].map(({ regex, ...pattern }) => ({
     ...pattern,
     source: regex.source,
     flags: regex.flags,

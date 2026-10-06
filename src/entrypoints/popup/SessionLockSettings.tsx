@@ -272,7 +272,7 @@ export function SessionLockSettings() {
           {enforced && (
             <p className={`si-lockcfg-note is-enforced${refused ? ' is-error' : ''}`} role="status">
               {refused
-                ? "Your team requires Session Lock — it can't be turned off."
+                ? "Your team requires Session Lock, so it can't be turned off."
                 : 'Required by your team policy.'}
             </p>
           )}

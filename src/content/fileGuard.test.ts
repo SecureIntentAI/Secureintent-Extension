@@ -114,6 +114,18 @@ test('Business custom patterns are applied to files', async () => {
   ).toMatchObject({ kind: 'blocked', count: 1 });
 });
 
+test('team-only patterns: an uploaded file with only emails and IPs is not flagged', async () => {
+  vi.mocked(getActiveBundle).mockResolvedValue({
+    ...DEFAULT_BUNDLE,
+    patterns: [
+      { type: 'known-key', label: 'Company key', regex: 'ACME-[A-Z0-9]{12}', origin: 'team' },
+    ],
+  });
+  expect(
+    await checkFiles([file('contacts.txt', 'ops@corp.com 10.0.0.5')], 'chatgpt.com'),
+  ).toMatchObject({ count: 0 });
+});
+
 test('oversized files fail closed before reading content', async () => {
   const upload = file('settings.json', '{}');
   Object.defineProperty(upload, 'size', { value: 4_000_001 });

@@ -21,7 +21,7 @@ export function LockWarning({ seconds }: LockWarningProps) {
   return (
     <div className="si-lockwarn" role="status">
       <span className="si-lockwarn-dot" />
-      <span>Locking in {n}s — move to stay active</span>
+      <span>Locking in {n}s. Move to stay active.</span>
     </div>
   );
 }

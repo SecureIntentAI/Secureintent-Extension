@@ -6,7 +6,7 @@ export interface SignedEntitlement {
   plan: 'developer' | 'developer_pro' | 'business_pro';
   source: 'manual' | 'lifetime' | 'org_seat' | 'paddle' | 'business_email' | 'none';
   /** The team this seat belongs to, when the plan came from an org subscription. */
-  org?: { id: string; name: string | null; role: string | null } | null;
+  org?: { id: string; name: string | null; role: string | null; seats?: number } | null;
   pro: boolean;
   features: string[];
   status: string | null;
@@ -34,7 +34,7 @@ export interface ActiveEntitlement {
   source: SignedEntitlement['source'];
   businessDomain: string | null;
   email: string | null;
-  org: { id: string; name: string | null; role: string | null } | null;
+  org: { id: string; name: string | null; role: string | null; seats?: number } | null;
 }
 
 export const FREE_ENTITLEMENT: ActiveEntitlement = {

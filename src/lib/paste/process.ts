@@ -47,6 +47,12 @@ export function createPasteComputation() {
         locations: preview.map((d) => locateInText(text as string, d)),
         total: detections.length,
         summary: input.summary ? summarize(detections) : undefined,
+        // Large logs show counts only, but team telemetry still needs findings
+        // to fingerprint. Never rendered; bounded like the preview.
+        sample:
+          input.summary && input.sample === true
+            ? detections.slice(0, MAX_PREVIEW_FINDINGS)
+            : undefined,
         types: [...new Set(detections.map((d) => d.type))],
         labels: [...new Set(detections.map((d) => d.label))],
         handledHash: contentHash(text).toString(),

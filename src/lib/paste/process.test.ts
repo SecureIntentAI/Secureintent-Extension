@@ -50,12 +50,26 @@ test('large log response stays compact while all findings are sanitized', () => 
   const scan = compute({
     id: 1,
     operation: 'scan',
-    input: { text, patterns, summary: true },
+    input: { text, patterns, summary: true, sample: true },
   }) as ScanResult;
   expect(scan.detections).toEqual([]);
   expect(scan.summary?.total).toBe(20_000);
-  expect(JSON.stringify(scan).length).toBeLessThan(1000);
+  // Telemetry gets a bounded sample to fingerprint; nothing else grows with the paste.
+  expect(scan.sample).toHaveLength(100);
+  const { sample: _sample, ...rest } = scan;
+  expect(JSON.stringify(rest).length).toBeLessThan(1000);
+  expect(JSON.stringify(scan).length).toBeLessThan(20_000);
   expect(compute({ id: 2, operation: 'sanitize', input: null })).not.toContain(SECRET);
+});
+
+test('a summary scan without a sample request (file checks) returns no raw findings', () => {
+  const scan = createPasteComputation()({
+    id: 1,
+    operation: 'scan',
+    input: { text: `${SECRET}\n`.repeat(50), patterns, summary: true },
+  }) as ScanResult;
+  expect(scan.sample).toBeUndefined();
+  expect(scan.detections).toEqual([]);
 });
 
 test('restoration operates on the original token text without cascading', () => {

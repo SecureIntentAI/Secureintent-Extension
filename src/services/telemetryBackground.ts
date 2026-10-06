@@ -102,7 +102,9 @@ function cleanEvent(
     !Number.isSafeInteger(event.policyVersion) ||
     Number(event.policyVersion) < 0 ||
     Number(event.policyVersion) > 4294967295 ||
-    !['cancelled', 'paste_anyway', 'paste_anonymously'].includes(String(event.action)) ||
+    !['cancelled', 'paste_anyway', 'paste_anonymously', 'sanitised', 'blocked'].includes(
+      String(event.action),
+    ) ||
     !Array.isArray(event.detections) ||
     !event.detections.length ||
     event.detections.length > 100

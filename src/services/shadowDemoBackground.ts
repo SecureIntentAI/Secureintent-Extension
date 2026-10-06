@@ -45,7 +45,7 @@ function snapshot(state: State, rules: AiServiceRule[], days: number, offset: nu
     const own = events.filter(event => event.serviceId === id);
     const rule = rules.find(item => item.serviceId === id);
     return { serviceId: id, name: service?.name || id, hostname: service?.hostnames[0] || own[0].hostname,
-      observedHostnames: [...new Set(own.map(event => event.hostname))], classification: rule?.classification || 'recognized',
+      observedHostnames: [...new Set(own.map(event => event.hostname))], classification: rule?.classification || 'review',
       pasteMode: rule?.pasteMode || 'normal', pasteBlocked: rule?.pasteMode === 'block_all',
       visits: own.filter(event => event.type === 'ai_page_visit').length,
       pastes: own.filter(event => event.type === 'ai_paste_volume').length,

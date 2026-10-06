@@ -943,6 +943,58 @@ describe('createPasteGuard', () => {
     expect(inserted).toContain('[#EMAIL_1#]');
   });
 
+  test('Sanitize & paste on a large paste reaches the team Overview as sanitised', async () => {
+    const t = setup();
+    await t.start();
+    const filler = 'application log line number forty-two here '.repeat(60);
+    await t.firePaste(t.makeEvent(`${filler} host 10.0.0.5 contacted ops@corp.com ${filler}`));
+    sendTelemetrySpy.mockClear();
+
+    await lastOnAction()('sanitize');
+    const event = await vi.waitFor(() => {
+      const call = sendTelemetrySpy.mock.calls.at(-1);
+      expect(call).toBeTruthy();
+      return call![0];
+    });
+    expect(event.action).toBe('sanitised');
+    expect(event.detections.length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(event)).not.toContain('10.0.0.5');
+    expect(JSON.stringify(event)).not.toContain('ops@corp.com');
+  });
+
+  test('a sanitise whose composer disappeared is not reported as sanitised', async () => {
+    const t = setup();
+    await t.start();
+    const filler = 'application log line number forty-two here '.repeat(60);
+    await t.firePaste(t.makeEvent(`${filler} host 10.0.0.5 contacted ops@corp.com ${filler}`));
+    sendTelemetrySpy.mockClear();
+    // The page re-renders and swaps the composer out while the sanitise runs:
+    // the job is still live, but there is nowhere to insert any more.
+    Object.defineProperty(t.input, 'isConnected', { configurable: true, get: () => false });
+    await lastOnAction()('sanitize');
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(document.execCommand).not.toHaveBeenCalled();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sendTelemetrySpy.mock.calls.map(([e]) => e?.action)).not.toContain('sanitised');
+  });
+
+  test('Paste anyway on a large paste is reported too', async () => {
+    const t = setup();
+    await t.start();
+    const filler = 'application log line number forty-two here '.repeat(60);
+    await t.firePaste(t.makeEvent(`${filler} host 10.0.0.5 contacted ops@corp.com ${filler}`));
+    sendTelemetrySpy.mockClear();
+
+    await lastOnAction()('paste');
+    const event = await vi.waitFor(() => {
+      const call = sendTelemetrySpy.mock.calls.at(-1);
+      expect(call).toBeTruthy();
+      return call![0];
+    });
+    expect(event.action).toBe('paste_anyway');
+  });
+
   test('small paste uses the normal per-finding overlay (no Ghost summary)', async () => {
     const t = setup();
     await t.start();
@@ -1319,6 +1371,22 @@ describe('createPasteGuard — team policy', () => {
       expect(document.execCommand).not.toHaveBeenCalled();
     });
 
+    test('a blocked paste that held a secret is reported as blocked', async () => {
+      await savePolicy({ blockedSites: [location.hostname] });
+      const t = setup();
+      await t.start();
+      await t.firePaste(t.makeEvent(`x ${SECRET} y`));
+      sendTelemetrySpy.mockClear();
+
+      await lastOnAction()('cancel');
+      const event = await vi.waitFor(() => {
+        const call = sendTelemetrySpy.mock.calls.at(-1);
+        expect(call).toBeTruthy();
+        return call![0];
+      });
+      expect(event.action).toBe('blocked');
+    });
+
     test('and reports nothing, because no secret was found to report', async () => {
       await savePolicy({ blockedSites: [location.hostname] });
       sendTelemetrySpy.mockClear();
@@ -1440,6 +1508,46 @@ describe('createPasteGuard — team patterns (origin)', () => {
     expect(dets.map((d: { origin?: string }) => d.origin)).toEqual([undefined, 'team']);
   });
 
+  // "Use only these patterns": the Worker serves the team's rules alone.
+  const saveTeamOnly = () =>
+    saveBundle({
+      ...DEFAULT_BUNDLE,
+      patterns: [{ type: 'pii', label: 'Employee ID', regex: '\\bEMP-\\d{6}\\b', origin: 'team' }],
+    });
+  const PLAIN = 'contact ops@corp.com from 10.0.0.5';
+
+  test('team-only mode: an email or IP is no longer flagged and the paste goes straight in', async () => {
+    await saveTeamOnly();
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(`${PLAIN} with key ${SECRET}`));
+
+    expect(mountOverlayMock).not.toHaveBeenCalled();
+    expect(document.execCommand).toHaveBeenCalledExactlyOnceWith(
+      'insertText',
+      false,
+      `${PLAIN} with key ${SECRET}`,
+    );
+  });
+
+  test('team-only mode: the team pattern itself is still caught', async () => {
+    await saveTeamOnly();
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(`${PLAIN} badge EMP-123456`));
+
+    expect(lastProps().detections.map((d: { label: string }) => d.label)).toEqual(['Employee ID']);
+  });
+
+  test('alongside the catalogue (toggle off), emails and IPs are still flagged', async () => {
+    await saveTeamPatterns();
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(PLAIN));
+
+    expect(lastProps().detections.length).toBeGreaterThanOrEqual(2);
+  });
+
   test('regression: with no team patterns the overlay sees findings with no origin', async () => {
     const t = setup();
     await t.start();
@@ -1496,7 +1604,11 @@ describe('fallback guard (catch-all)', () => {
 
   test('a clean paste into an email field lands (no selection API on type=email)', async () => {
     const handlers: Record<string, (e: unknown) => unknown> = {};
-    const ctx = { addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => { handlers[type] = cb; } };
+    const ctx = {
+      addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => {
+        handlers[type] = cb;
+      },
+    };
     const input = document.createElement('input');
     input.type = 'email';
     document.body.appendChild(input);
@@ -1505,7 +1617,14 @@ describe('fallback guard (catch-all)', () => {
       if (command === 'insertText') input.value += value ?? '';
       return true;
     }) as typeof document.execCommand;
-    const e = { target: input, isTrusted: true, clipboardData: { getData: () => 'kaushik.raj' }, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), composedPath: () => composedPathFrom(input) };
+    const e = {
+      target: input,
+      isTrusted: true,
+      clipboardData: { getData: () => 'kaushik.raj' },
+      preventDefault: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+      composedPath: () => composedPathFrom(input),
+    };
     await createPasteGuard(ctx as never, { name: 'example.com', siteKey: 'fallback' });
     await handlers.paste?.(e);
     await vi.waitFor(() => expect(input.value).toBe('kaushik.raj'));
@@ -1514,12 +1633,23 @@ describe('fallback guard (catch-all)', () => {
 
   test('an editor that rejects the insertion releases the paste quietly (no blocking dialog)', async () => {
     const handlers: Record<string, (e: unknown) => unknown> = {};
-    const ctx = { addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => { handlers[type] = cb; } };
+    const ctx = {
+      addEventListener: (_t: unknown, type: string, cb: (e: unknown) => unknown) => {
+        handlers[type] = cb;
+      },
+    };
     const input = document.createElement('input');
     input.type = 'email';
     document.body.appendChild(input);
     document.execCommand = vi.fn(() => false) as typeof document.execCommand; // editor ignores it
-    const make = () => ({ target: input, isTrusted: true, clipboardData: { getData: () => 'plain words' }, preventDefault: vi.fn(), stopImmediatePropagation: vi.fn(), composedPath: () => composedPathFrom(input) });
+    const make = () => ({
+      target: input,
+      isTrusted: true,
+      clipboardData: { getData: () => 'plain words' },
+      preventDefault: vi.fn(),
+      stopImmediatePropagation: vi.fn(),
+      composedPath: () => composedPathFrom(input),
+    });
     await createPasteGuard(ctx as never, { name: 'example.com', siteKey: 'fallback' });
     await handlers.paste?.(make());
     await new Promise((r) => setTimeout(r, 0));
@@ -1527,7 +1657,9 @@ describe('fallback guard (catch-all)', () => {
     // Released: the next paste is processed rather than queued behind a dialog.
     const calls = vi.mocked(document.execCommand).mock.calls.length;
     await handlers.paste?.(make());
-    await vi.waitFor(() => expect(vi.mocked(document.execCommand).mock.calls.length).toBeGreaterThan(calls));
+    await vi.waitFor(() =>
+      expect(vi.mocked(document.execCommand).mock.calls.length).toBeGreaterThan(calls),
+    );
   });
 
   test('blocks a secret on an unsupported site (no dedicated guard present)', async () => {
