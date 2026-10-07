@@ -252,14 +252,24 @@ function claimShadowVisit(): boolean {
   return true;
 }
 
-function isSecureIntentAuthenticationPage(): boolean {
-  const host = location.hostname.toLowerCase();
-  const ownHost = host === 'secureintent.ai' || host === 'www.secureintent.ai';
-  const localPilot = host === '127.0.0.1' || host === 'localhost';
-  if (!ownHost && !localPilot) return false;
-  return ['/account.html', '/business_promo.html', '/lifetime_business_promo.html'].includes(
-    location.pathname,
-  );
+/**
+ * SecureIntent's own pages are never guarded: whatever is pasted there stays
+ * with SecureIntent (an admin pasting a member's email into Users → Invite is
+ * not a leak, and must not show a warning or count as a detection). On a local
+ * pilot (localhost) only our own pages are skipped, so a developer's local app
+ * stays protected.
+ */
+export function isSecureIntentOwnPage(hostname: string, pathname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === 'secureintent.ai' || host.endsWith('.secureintent.ai')) return true;
+  if (host !== '127.0.0.1' && host !== 'localhost') return false;
+  return [
+    '/account.html',
+    '/business_promo.html',
+    '/lifetime_business_promo.html',
+    '/team.html',
+    '/shadow.html',
+  ].includes(pathname);
 }
 
 export async function createPasteGuard(
@@ -323,7 +333,7 @@ export async function createPasteGuard(
     // active. Email addresses and recovery codes are expected authentication
     // input here; intercepting them can prevent the user from signing in to the
     // product that owns the guard.
-    if (disposed || isSecureIntentAuthenticationPage()) return;
+    if (disposed || isSecureIntentOwnPage(location.hostname, location.pathname)) return;
     if (processPaste) {
       if (isFallback && dedicatedActive()) return;
       return processPaste(event);

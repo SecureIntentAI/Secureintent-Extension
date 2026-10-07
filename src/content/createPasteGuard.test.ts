@@ -164,6 +164,21 @@ describe('createPasteGuard', () => {
   });
   afterEach(() => document.body.replaceChildren());
 
+  test('the admin console (Users → Invite) is not guarded on a local pilot either', async () => {
+    const previous = location.href;
+    history.replaceState({}, '', '/team.html');
+    try {
+      const t = setup();
+      await t.start();
+      const event = t.makeEvent('kaushik.raj@secureintent.ai');
+      await t.firePaste(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+      expect(mountOverlayMock).not.toHaveBeenCalled();
+    } finally {
+      history.replaceState({}, '', new URL(previous).pathname);
+    }
+  });
+
   test('does not intercept SecureIntent Business authentication fields', async () => {
     const previous = location.href;
     history.replaceState({}, '', '/business_promo.html');
