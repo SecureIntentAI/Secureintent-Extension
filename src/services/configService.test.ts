@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
+import { browser } from '#imports';
 import { DEFAULT_BUNDLE } from '@/lib/config/default';
 import { getPolicy } from '@/lib/config/policy';
 import { getActiveBundle, saveBundle } from '@/lib/config/store';
 import type { BundlePolicy } from '@/lib/config/types';
-import { syncConfig } from './configService';
+import { entitlementItem, type SignedEntitlement } from '@/lib/entitlement';
+import { type SyncResult, syncConfig } from './configService';
 
 // The Worker resolves the caller's org from the Clerk session token, so config
 // sync carries it when there is one. Mocked: real minting needs the Clerk SDK.
@@ -43,6 +45,13 @@ function lastRequestHeaders(): Record<string, string> | undefined {
   return (call?.[1] as { headers?: Record<string, string> } | undefined)?.headers;
 }
 
+async function storedSyncStatus(): Promise<
+  { at: number; status: SyncResult['status'] } | undefined
+> {
+  const stored = await browser.storage.local.get('si_policy_sync_status');
+  return stored.si_policy_sync_status as { at: number; status: SyncResult['status'] } | undefined;
+}
+
 const TEAM_POLICY: BundlePolicy = {
   blockInsteadOfWarn: true,
   requireSessionLock: true,
@@ -77,6 +86,41 @@ describe('syncConfig', () => {
     const r = await syncConfig();
     expect(r.status).toBe('error');
     expect((await getActiveBundle()).version).toBe(50);
+  });
+  test('a successful poll clears a previous sync failure status', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('offline');
+      }),
+    );
+    await syncConfig();
+    expect((await storedSyncStatus())?.status).toBe('error');
+    const bundle = { ...DEFAULT_BUNDLE, version: 51 };
+    mockConfig(bundle, await sign(bundle));
+    await syncConfig();
+    expect((await storedSyncStatus())?.status).toBe('updated');
+  });
+
+  test('an older failed request cannot replace the latest successful sync status', async () => {
+    let rejectOld!: (error: Error) => void;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            rejectOld = reject;
+          }),
+      ),
+    );
+    const old = syncConfig();
+    await vi.waitFor(() => expect(rejectOld).toBeTypeOf('function'));
+    const bundle = { ...DEFAULT_BUNDLE, version: 52 };
+    mockConfig(bundle, await sign(bundle));
+    expect((await syncConfig()).status).toBe('updated');
+    rejectOld(new Error('old outage'));
+    expect((await old).status).toBe('error');
+    expect((await storedSyncStatus())?.status).toBe('updated');
   });
   test('rejects an invalid bundle without overwriting cache', async () => {
     await saveBundle({ ...DEFAULT_BUNDLE, version: 50 });
@@ -162,6 +206,23 @@ describe('syncConfig — team policy', () => {
 
   test('a signed-in member stores a policy published at the current catalogue version', async () => {
     getClerkTokenMock.mockResolvedValue('jwt-abc');
+    const entitlement: SignedEntitlement = {
+      clerkUserId: 'test-user',
+      plan: 'business_pro',
+      pro: true,
+      features: ['session_lock'],
+      source: 'org_seat',
+      status: 'active',
+      businessDomain: null,
+      org: { id: 'org_acme', name: 'Acme', role: 'org:member' },
+      issuedAt: 0,
+      exp: 9_999_999_999,
+    };
+    await entitlementItem.setValue({
+      blob: entitlement,
+      payload: JSON.stringify(entitlement),
+      signature: await sign(entitlement),
+    });
     await saveBundle({ ...DEFAULT_BUNDLE, version: 12 });
     const b = {
       ...DEFAULT_BUNDLE,
@@ -174,6 +235,37 @@ describe('syncConfig — team policy', () => {
     expect((await syncConfig()).status).toBe('updated');
     expect(getPolicy(await getActiveBundle()).blockedSites).toEqual(['pastebin.com']);
     expect((await getActiveBundle()).policyVersion).toBe(2);
+  });
+
+  test('a signed policy for another organization cannot replace the current rules', async () => {
+    getClerkTokenMock.mockResolvedValue('jwt-abc');
+    const entitlement: SignedEntitlement = {
+      clerkUserId: 'test-user',
+      plan: 'business_pro',
+      pro: true,
+      features: [],
+      source: 'org_seat',
+      status: 'active',
+      businessDomain: null,
+      org: { id: 'org_acme', name: 'Acme', role: 'org:member' },
+      issuedAt: 0,
+      exp: 9_999_999_999,
+    };
+    await entitlementItem.setValue({ blob: entitlement, signature: await sign(entitlement) });
+    const current = {
+      ...DEFAULT_BUNDLE,
+      policy: { ...TEAM_POLICY, orgId: 'org_acme' },
+      policyVersion: 2,
+    };
+    await saveBundle(current);
+    const incoming = {
+      ...current,
+      policy: { ...TEAM_POLICY, orgId: 'org_other' },
+      policyVersion: 3,
+    };
+    mockConfig(incoming, await sign(incoming));
+    expect((await syncConfig()).error).toBe('policy organization mismatch');
+    expect(await getActiveBundle()).toEqual(current);
   });
 
   test('a signed-out refresh does not install or drop team rules at the same version', async () => {

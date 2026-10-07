@@ -460,6 +460,11 @@
 .si-feat--active .si-feat-state {
   color: var(--si-cyan);
 }
+.si-feat--soon .si-feat-ic,
+.si-feat--soon .si-feat-label,
+.si-feat--soon .si-feat-state {
+  color: var(--si-muted);
+}
 .si-feat--locked .si-feat-ic {
   color: var(--si-faint);
 }
@@ -1116,7 +1121,10 @@
   border-radius: 10px;
   background: rgba(114, 255, 255, 0.06);
   color: #72ffff;
-  font: 600 11.5px / 1 inherit;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
   cursor: pointer;
 }
 .si-team-link:hover {
@@ -1124,6 +1132,72 @@
 }
 .si-team-link svg {
   margin-left: auto;
+}
+
+/* "Manage team": a card of its own under the profile, for team admins only.
+   Same surface as the profile card so the two read as one account block. */
+.si-team-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  text-align: left;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--si-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
+}
+.si-team-row:hover {
+  border-color: rgba(114, 255, 255, 0.35);
+  background: rgba(114, 255, 255, 0.05);
+}
+.si-team-row:focus-visible {
+  outline: 2px solid var(--si-cyan);
+  outline-offset: 2px;
+}
+.si-team-row-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--si-cyan);
+  background: rgba(114, 255, 255, 0.1);
+  border: 1px solid rgba(114, 255, 255, 0.25);
+}
+.si-team-row-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.si-team-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--si-text);
+}
+.si-team-row-sub {
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--si-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.si-team-row > svg {
+  flex: 0 0 auto;
+  color: var(--si-muted);
+}
+.si-team-row:hover > svg {
+  color: var(--si-cyan);
 }
 
 /* Plan lookup failed — say so where the plan is shown, and offer a way out. */
@@ -1137,6 +1211,28 @@
   border: 1px solid rgba(255, 107, 107, 0.3);
   border-radius: 10px;
   background: rgba(255, 107, 107, 0.08);
+}
+
+.si-policy-notice {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(114, 255, 255, .35);
+  border-radius: 10px;
+  background: rgba(114, 255, 255, .08);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.si-policy-notice span { color: var(--si-muted); }
+.si-policy-notice-actions { display: flex; gap: 12px; margin-top: 2px; }
+.si-policy-notice-actions button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--si-cyan);
+  font: inherit;
+  cursor: pointer;
 }
 .si-account-error-text {
   flex: 1;

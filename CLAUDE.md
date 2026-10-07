@@ -187,6 +187,9 @@ src/
   log or send raw content to SecureIntent. Vault token → secret pairs live only in `storage.session`.
 - The overlay uses a **closed** shadow root for UI isolation. Paste and supported text-file checks
   fail closed on scanner errors, overload, or timeout; content is not passed to the page unchecked.
+  A paste that fails (scanner, quota, transform or insertion) is logged and released without a
+  blocking dialog (product decision, see `b4aca32`/`f73e6d6`). Insertion into rich editors is
+  verified by the inserted characters, ignoring whitespace layout (editors turn `\n` into blocks).
 - The paste handler must call `preventDefault`/`stopImmediatePropagation` **synchronously**, before
   any `await`. The `enabled` flag and the vault snapshot are cached in local vars (refreshed via
   watchers) and read synchronously — don't turn those into `await`s inside the handler.
@@ -194,7 +197,9 @@ src/
   the page's own paste handlers. Programmatic pastes (our own `execCommand('insertText')` re-inserts)
   are skipped via `e.isTrusted`.
 - Detection is regex-then-validator; overlapping matches resolve by `TYPE_RANK` (private-key >
-  known-key > env-credential), then longer match wins. Broad regexes (cards) are confirmed by a
+  known-key > env-credential), then longer match wins. Exception: a personal-data finding (email,
+  IP) that lies entirely inside a credential match is dropped first, so a connection string such as
+  `postgres://user:pass@10.0.0.5/db` is masked whole instead of only its host. Broad regexes (cards) are confirmed by a
   post-match validator (Luhn / entropy) to avoid false positives.
 - The guard reads the active bundle at content-script boot, then resolves the input selector as
   `bundle.sites[siteKey]?.inputSelector ?? siteSelectors[siteKey]` (remote overrides static fallback).

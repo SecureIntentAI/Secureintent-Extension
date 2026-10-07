@@ -123,6 +123,20 @@ function* scanSecrets(
     }
   }
 
+  // Personal data inside a credential belongs to that credential: the host IP
+  // or user@host of postgres://user:pass@10.0.0.5/db must not outrank the
+  // connection string, or masking would cover the host and leave the password.
+  const CREDENTIAL: ReadonlySet<string> = new Set(['private-key', 'known-key', 'env-credential']);
+  const credentials = raw.filter((d) => CREDENTIAL.has(d.type));
+  if (credentials.length) {
+    for (let i = raw.length - 1; i >= 0; i--) {
+      const d = raw[i];
+      if (d.type !== 'pii') continue;
+      if (credentials.some((c) => c.start <= d.start && d.end <= c.end)) raw.splice(i, 1);
+      if (++steps % 256 === 0) yield;
+    }
+  }
+
   // Resolve overlaps: prefer higher rank, then longer match.
   //
   // A type this build doesn't know ranks lowest rather than producing NaN. The
@@ -168,12 +182,21 @@ function* scanSecrets(
 }
 
 /**
+ * A team chose "Use only these patterns": the Worker then serves nothing but the
+ * team's own rules. Built-in detection, including the supplemental email/IP
+ * checks the guards append, stays off for that team, as the console promises.
+ */
+export function teamPatternsOnly(remote: Pattern[]): boolean {
+  return remote.length > 0 && remote.every((pattern) => pattern.origin === 'team');
+}
+
+/**
  * Baked-in detectors always run. A signed bundle can add rules (team patterns
  * and newly shipped names) but cannot drop a key format this build already
  * knows. A bundle that is only team rules replaces the catalogue on purpose.
  */
 export function mergeCatalog(remote: Pattern[]): Pattern[] {
-  if (remote.length > 0 && remote.every((pattern) => pattern.origin === 'team')) return remote;
+  if (teamPatternsOnly(remote)) return remote;
   const known = new Set(PATTERNS.map((pattern) => pattern.label));
   const extra = remote.filter((pattern) => pattern.origin === 'team' || !known.has(pattern.label));
   return [...PATTERNS, ...extra];

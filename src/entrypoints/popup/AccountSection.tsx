@@ -1,4 +1,3 @@
-import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 import { Show, useUser } from '@clerk/chrome-extension';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browser } from '#imports';
@@ -9,6 +8,7 @@ import {
   SHADOW_DASHBOARD_URL,
   TEAM_URL,
 } from '@/lib/clerkConfig';
+import { configItem } from '@/lib/config/store';
 import {
   type ActiveEntitlement,
   canManageTeam,
@@ -16,6 +16,7 @@ import {
   getActiveEntitlement,
 } from '@/lib/entitlement';
 import type { RefreshResult } from '@/lib/entitlement/refresh';
+import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
 
 const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
   developer: 'Free',
@@ -29,11 +30,15 @@ const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
  * Both browser paths use this, so the two bars can't drift apart again.
  */
 function planText(ent: ActiveEntitlement): string {
-  return ent.org ? `${PLAN_LABEL[ent.plan]} · ${ent.org.name ?? 'Team'}` : PLAN_LABEL[ent.plan];
+  const label =
+    ent.plan === 'business_pro' && ent.org?.role === 'org:member'
+      ? 'Developer Pro'
+      : PLAN_LABEL[ent.plan];
+  return ent.org ? `${label} · ${ent.org.name ?? 'Team'}` : label;
 }
 
 /** Why the plan on screen might not be the one the user expects. */
-const REFRESH_UNAVAILABLE = "Couldn't check your plan just now — showing the last one we saw.";
+const REFRESH_UNAVAILABLE = "Couldn't check your plan just now. Showing the last one we saw.";
 const REFRESH_CLEARED =
   "We couldn't verify your Pro licence on this device, so it's been reset to Free. Sign in again on the account page, then retry.";
 
@@ -76,25 +81,153 @@ function openShadowDashboard() {
   browser.tabs.create({ url: SHADOW_DASHBOARD_URL }).catch(() => {});
 }
 
-/** Team console shortcut. Admins only — a member has nothing to manage there. */
-function TeamLink({ ent }: { ent: ActiveEntitlement }) {
-  if (!canManageTeam(ent)) return null;
+function TeamIcon() {
   return (
-    <button type="button" className="si-team-link" onClick={openTeamTab}>
-      Manage team
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+      <circle cx="9" cy="8.5" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M3.5 18.5a5.5 5.5 0 0 1 11 0"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <circle cx="16.5" cy="9.5" r="2.4" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M15.5 14.2a4.6 4.6 0 0 1 5 4.3"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Team console shortcut: a row of its own under the profile, naming the
+ * organisation and its seats. Admins only; a member has nothing to manage there.
+ */
+function TeamLink({ ent }: { ent: ActiveEntitlement }) {
+  if (!canManageTeam(ent) || !ent.org) return null;
+  const seats =
+    Number(ent.org.seats) > 0
+      ? ` · ${Number(ent.org.seats).toLocaleString()} ${Number(ent.org.seats) === 1 ? 'seat' : 'seats'}`
+      : '';
+  return (
+    <button type="button" className="si-team-row" onClick={openTeamTab}>
+      <span className="si-team-row-icon" aria-hidden="true">
+        <TeamIcon />
+      </span>
+      <span className="si-team-row-lines">
+        <span className="si-team-row-title">Manage team</span>
+        <span className="si-team-row-sub">
+          {ent.org.name ?? 'Your organisation'}
+          {seats}
+        </span>
+      </span>
       <ChevronIcon />
     </button>
   );
 }
 
-/** Available to every active Business seat; policy controls remain admin-only. */
-function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
-  if (ent.plan !== 'business_pro' || !ent.org) return null;
+function RadarIcon() {
   return (
-    <button type="button" className="si-team-link" onClick={openShadowDashboard}>
-      Shadow AI dashboard
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 12l5.5-5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** The organization dashboard contains team activity, so only admins see this link. */
+function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
+  if (ent.plan !== 'business_pro' || !canManageTeam(ent)) return null;
+  return (
+    <button type="button" className="si-team-row" onClick={openShadowDashboard}>
+      <span className="si-team-row-icon" aria-hidden="true">
+        <RadarIcon />
+      </span>
+      <span className="si-team-row-lines">
+        <span className="si-team-row-title">Shadow AI dashboard</span>
+        <span className="si-team-row-sub">AI tools your team uses</span>
+      </span>
       <ChevronIcon />
     </button>
+  );
+}
+
+function PolicyUpdateNotice({
+  ent,
+  identity,
+}: {
+  ent: ActiveEntitlement;
+  identity: string | null;
+}) {
+  const [notice, setNotice] = useState<{
+    key: string;
+    revision: number;
+    dismissed: boolean;
+  } | null>(null);
+  const readId = useRef(0);
+  const orgId = ent.source === 'org_seat' ? ent.org?.id : null;
+  const key = orgId && identity ? `si_policy_notice:${identity.toLowerCase()}:${orgId}` : null;
+
+  useEffect(() => {
+    let active = true;
+    const read = async () => {
+      const id = ++readId.current;
+      const live = () => active && id === readId.current;
+      if (!key || !orgId) {
+        if (live()) setNotice(null);
+        return;
+      }
+      try {
+        const bundle = await configItem.getValue();
+        const version = bundle?.policy?.orgId === orgId ? (bundle.policyVersion ?? 0) : 0;
+        const saved = (await browser.storage.local.get(key))[key];
+        if (live()) {
+          setNotice(version > 0 ? { key, revision: version, dismissed: saved === version } : null);
+        }
+      } catch {
+        if (live()) setNotice(null);
+      }
+    };
+    void read();
+    const onChange = () => {
+      void read();
+    };
+    browser.storage.onChanged.addListener(onChange);
+    return () => {
+      active = false;
+      readId.current++;
+      browser.storage.onChanged.removeListener(onChange);
+    };
+  }, [key, orgId]);
+
+  if (!notice || notice.key !== key || notice.dismissed) return null;
+  const { revision } = notice;
+  return (
+    <div className="si-policy-notice" role="status">
+      <strong>Team policy revision {revision} downloaded</strong>
+      <span>
+        Open your account to see the current rules and whether your devices confirmed them.
+      </span>
+      <div className="si-policy-notice-actions">
+        <button type="button" onClick={openAccountTab}>
+          View policy
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            readId.current++; // a pending read must not undo this acknowledgement
+            setNotice({ ...notice, dismissed: true });
+            void browser.storage.local.set({ [notice.key]: revision }).catch(() => {});
+          }}
+        >
+          Got it
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -209,6 +342,7 @@ function SignedInBar() {
       </button>
       <TeamLink ent={ent} />
       <ShadowDashboardLink ent={ent} />
+      <PolicyUpdateNotice ent={ent} identity={user?.id ?? null} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );
@@ -356,21 +490,29 @@ function FirefoxAccountBar() {
       </button>
       <TeamLink ent={ent} />
       <ShadowDashboardLink ent={ent} />
+      <PolicyUpdateNotice ent={ent} identity={ent.email} />
       {error && <AccountError message={error} onRetry={retry} />}
     </>
   );
 }
 
 export function AccountSection() {
-  if (SHADOW_DEMO) return (
-    <div className="si-profile-wrap">
-      <button type="button" className="si-team-link" onClick={() => {
-        browser.tabs.create({ url: new URL('shadow.html', browser.runtime.getURL('/popup.html')).href }).catch(() => {});
-      }}>
-        Live Shadow AI · local demo <ChevronIcon />
-      </button>
-    </div>
-  );
+  if (SHADOW_DEMO)
+    return (
+      <div className="si-profile-wrap">
+        <button
+          type="button"
+          className="si-team-link"
+          onClick={() => {
+            browser.tabs
+              .create({ url: new URL('shadow.html', browser.runtime.getURL('/popup.html')).href })
+              .catch(() => {});
+          }}
+        >
+          Live Shadow AI · local demo <ChevronIcon />
+        </button>
+      </div>
+    );
   if (isClerkSdkEnabled()) {
     // Chrome: full Clerk SDK with signed-in/out components.
     return (

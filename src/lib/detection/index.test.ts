@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { detectSecrets } from './index';
+import { detectSecrets, GHOST_EXTRA_PATTERNS, redact } from './index';
+import { PATTERNS } from './patterns';
 import { githubTokenChecksum } from './validators';
 
 const checksummedFixture = (prefix: string) => {
@@ -207,8 +208,8 @@ describe('detectSecrets — env credentials', () => {
   test('detects a PASSWORD= assignment', () => {
     const dets = detectSecrets('PASSWORD=hunter2supersecret');
     const env = dets.find((d) => d.type === 'env-credential');
-    expect(env?.label).toBe('Credential assignment');
-    expect(env?.match).toBe('PASSWORD=hunter2supersecret');
+    expect(env?.label).toBe('Structured credential');
+    expect(env?.match).toBe('hunter2supersecret');
   });
 
   test('detects a connection string with inline credentials', () => {
@@ -353,7 +354,7 @@ describe('detectSecrets — false-positive guards (normal text)', () => {
 describe('detectSecrets — multiple & overlap', () => {
   test('finds multiple secrets sorted by position', () => {
     const a = 'sk-' + 'a'.repeat(30);
-    const b = 'ghp_' + 'b'.repeat(36);
+    const b = checksummedFixture('gh' + 'p_');
     const dets = detectSecrets(`first ${a} then ${b}`);
     expect(dets).toHaveLength(2);
     expect(dets[0].start).toBeLessThan(dets[1].start);
@@ -407,5 +408,69 @@ describe('prefixed credential names', () => {
     'PASSWORD_HASH=abcdefgh',
   ])('leaves %s alone — these are everywhere in AI tooling config', (sample) => {
     expect(found(sample)).toHaveLength(0);
+  });
+});
+
+describe('detectSecrets — personal data inside a credential', () => {
+  // Email and IP rules run on every paste. Inside a connection string they used
+  // to outrank it, so Anonymise masked the host and left the password visible.
+  const all = [...PATTERNS, ...GHOST_EXTRA_PATTERNS];
+  const cases = [
+    ['postgres://admin:S3cr3tPass@10.0.0.5:5432/app', 'S3cr3tPass'],
+    ['postgres://admin:S3cr3t!Pa$$w0rd@db.example.com/app', 'Pa$$w0rd'],
+    ['mysql://root:abc#def123@db.internal.example:3306/x', 'abc#def123'],
+    ['amqp://guest:Zx9!kQ#2mP@mq.example.com:5672', 'Zx9!kQ#2mP'],
+    ['mongodb+srv://svc:Hunter2Hunter2@cluster0.example.net/db', 'Hunter2Hunter2'],
+  ] as const;
+  test.each(cases)('%s is masked as one credential, password included', (text, password) => {
+    const dets = detectSecrets(`DATABASE_URL=${text}`, all);
+    const masked = redact(`DATABASE_URL=${text}`, dets);
+    expect(masked).not.toContain(password);
+    expect(dets.some((d) => d.type === 'pii')).toBe(false);
+  });
+  test('an email or IP on its own is still reported as personal data', () => {
+    const dets = detectSecrets('contact ops@example.com from 10.0.0.5 today', all);
+    expect(dets.map((d) => d.label).sort()).toEqual(['Email address', 'IP address']);
+  });
+  test('an email next to, not inside, a credential keeps its own finding', () => {
+    const dets = detectSecrets('mail me@example.com key sk-abcdefghijklmnopqrstuvwxyz012345', all);
+    expect(dets.map((d) => d.type).sort()).toEqual(['known-key', 'pii']);
+  });
+});
+
+describe('Possible API key (short prefixed internal keys)', () => {
+  const labels = (text: string) => detectSecrets(text).map((d) => d.label);
+  test.each([
+    'sk_live_8Qm4Zp7Lx2Vr9Nk5',
+    'api_3Fv8Kq1Tz6Mn4Rw9',
+    'key_prod_6Tr9Wm2Xq4Zn7Lp',
+    'ak_5Nv8Qx3Kj7Rm2Tc9',
+    'api_live_9Lp4Vx7Qm2Kr8Nd5',
+    'secret_3Zq7Wn5Mx9Tp2Lf8',
+    'tok_test_8Km2Rz6Vq4Xp9Nd',
+    'client_7Qx5Lm9Kr2Vn8Tc4',
+    'access_4Wp9Zk6Xq3Mn7Lv2',
+  ])('catches %s on its own line', (key) => {
+    expect(labels(`3. ${key}`)).toEqual(['Possible API key']);
+  });
+
+  test.each([
+    'pk_test_B9x2Lm7Qv5Kp8Hd3', // publishable by design
+    'api_V1GetUserProfileById', // code names
+    'access_tokenUrlForOAuth2',
+    'client_secretManagerV2',
+    'api_version_2024_10_01',
+    'key_ABCDEFGHIJKLMNOP1',
+    'Set the access_token value, then call api_v2 with key rotation every 30 days.',
+  ])('leaves %s alone', (text) => {
+    expect(labels(text)).toEqual([]);
+  });
+
+  test('a recognised provider format keeps its own name', () => {
+    expect(labels('sk_live_51Hx8Qm4Zp7Lx2Vr9Nk5Tc4Wp9Zk6')).toEqual(['Stripe key']);
+  });
+
+  test('is skipped inside links, like the other random-string rules', () => {
+    expect(labels('https://example.com/share/api_3Fv8Kq1Tz6Mn4Rw9')).toEqual([]);
   });
 });

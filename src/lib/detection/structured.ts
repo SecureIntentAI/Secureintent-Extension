@@ -3,6 +3,16 @@ import { hasFingerprintContext, isPlaceholderCredentialValue, shannon } from './
 
 const KEY_NAME =
   /(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|credential|password|passwd|private[_-]?key|secret|token)(?:$|[_-])/i;
+function publicField(name: string): boolean {
+  const normalized = name
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/[.\s:]+/g, '_')
+    .toLowerCase();
+  return /(?:^|[_-])(?:public[_-]?key|key[_-]?id|client[_-]?id|token[_-]?count|secret[_-]?name|password[_-]?hash)(?:$|[_-])/.test(
+    normalized,
+  );
+}
+
 function secretField(name: string): boolean {
   const normalized = name
     .replace(/([a-z])([A-Z])/g, '$1_$2')
@@ -53,8 +63,10 @@ function pushCredential(
 ): void {
   const value = text.slice(start, end);
   const accepted = strongContext
-    ? value.length >= 12 && !/^(?:https?:\/\/|\d+$)/i.test(value) &&
-      !isPlaceholderCredentialValue(value) && new Set(value).size >= 4
+    ? value.length >= 12 &&
+      !/^(?:https?:\/\/|\d+$)/i.test(value) &&
+      !isPlaceholderCredentialValue(value) &&
+      new Set(value).size >= 4
     : likelyCredential(name, value);
   if (!accepted) return;
   if (findings.length >= maxFindings) throw new RangeError('Too many findings to process safely');
@@ -167,7 +179,10 @@ export function detectStructuredCredentials(text: string, maxFindings = Infinity
       const scalar = rawValue.trim();
       const quote = scalar[0] === '"' || scalar[0] === "'" ? scalar[0] : '';
       const value = quote && scalar.endsWith(quote) ? scalar.slice(1, -1) : scalar;
-      const offset = start + line.indexOf(yaml[2]) + leading + (quote ? 1 : 0);
+      // The scalar may also occur in the key (password: password). Search from
+      // the separator so a value-only finding cannot redact the field instead.
+      const valueStart = line.indexOf(yaml[2], line.indexOf(':') + 1);
+      const offset = start + valueStart + leading + (quote ? 1 : 0);
       pushCredential(
         findings,
         maxFindings,
@@ -211,14 +226,18 @@ export function detectStructuredCredentials(text: string, maxFindings = Infinity
     const leading = value.length - value.trimStart().length;
     const trailing = value.trimEnd().length;
     if (trailing <= leading || !secretField(match[1])) continue;
-    const start = match.index + match[0].indexOf(value) + leading;
+    // The same value can occur in the opening tag or one of its attributes.
+    // This regexp's text capture starts immediately after the opening '>':
+    // searching the whole match for the value would select the wrong copy.
+    const valueStart = match.index + match[0].indexOf('>') + 1;
+    const start = valueStart + leading;
     pushCredential(
       findings,
       maxFindings,
       text,
       match[1],
       start,
-      match.index + match[0].indexOf(value) + trailing,
+      valueStart + trailing,
       'Structured credential',
     );
   }
@@ -270,7 +289,10 @@ export function detectUnknownTokens(
     // treating a public identifier as secret merely because it looks random.
     if (text[start - 1] === '"' || text[start - 1] === "'" || text[i] === '"' || text[i] === "'")
       continue;
-    if (/^[\w-]+\s*=\s*$/.test(text.slice(Math.max(lineStart, start - 128), start))) continue;
+    const fieldPrefix = text.slice(Math.max(lineStart, start - 128), start);
+    if (/^[\w-]+\s*=\s*$/.test(fieldPrefix)) continue;
+    const yamlField = /^\s*([A-Za-z_][A-Za-z0-9_.-]{0,127})\s*:\s*$/.exec(fieldPrefix);
+    if (yamlField && publicField(yamlField[1])) continue;
     if (value.length < 32 || value.length > 512) continue;
     if (!/[A-Z]/.test(value) || !/[a-z]/.test(value) || !/\d/.test(value)) continue;
     if (!/[._-]/.test(value) || shannon(value) < 4) continue;

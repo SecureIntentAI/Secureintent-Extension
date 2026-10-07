@@ -35,7 +35,7 @@ export function BridgeSettings() {
         <span className="si-lockcfg-title">Desktop app</span>
       </div>
       <p className="si-lockcfg-note is-set">
-        Connected. Shares the site you’re on — never the page — with the SecureIntent app on this
+        Connected. Shares the site you’re on (never the page) with the SecureIntent app on this
         computer, so one copy isn’t flagged twice.
       </p>
     </section>

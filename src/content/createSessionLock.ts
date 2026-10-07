@@ -24,6 +24,8 @@ const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'
 /** Reactive walk-away deterrent; the underlying console session remains live. */
 export async function createSessionLock(ctx: ContentScriptContext): Promise<void> {
   let revision = 0;
+  let refreshRevision = 0;
+  let configured = false;
   let disposed = false;
   let enabled = false;
   let pinHash: string | null = null;
@@ -34,7 +36,7 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
   let warning: LockWarningHandle | undefined;
   let warnTimer: ReturnType<typeof setTimeout> | undefined;
   let lockTimer: ReturnType<typeof setTimeout> | undefined;
-  let lastActivity = 0;
+  let lastActivity = Date.now();
   let attempts = 0;
   let retryAfter = 0;
   const salt = await getOrCreateSalt(browserStore);
@@ -53,7 +55,12 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
   const arm = () => {
     clearTimers();
     if (!enabled || locked || disposed) return;
-    const warnMs = Math.min(10_000, Math.floor(timeoutMs / 2));
+    const remaining = Math.max(0, timeoutMs - (Date.now() - lastActivity));
+    if (remaining === 0) {
+      void lock();
+      return;
+    }
+    const warnMs = Math.min(10_000, Math.floor(timeoutMs / 2), remaining);
     warnTimer = setTimeout(async () => {
       const version = revision;
       lockTimer = setTimeout(() => {
@@ -62,7 +69,7 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
       const ui = await mountLockWarning(ctx, { seconds: Math.round(warnMs / 1000) });
       if (disposed || locked || version !== revision) ui.remove();
       else warning = ui;
-    }, timeoutMs - warnMs);
+    }, remaining - warnMs);
   };
   const lock = async () => {
     if (!enabled || locked || disposed) return;
@@ -91,6 +98,7 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
         setFlag(false);
         handle?.remove();
         handle = undefined;
+        lastActivity = Date.now();
         arm();
         return true;
       },
@@ -99,13 +107,30 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
     else handle = ui;
   };
   const refresh = async () => {
-    const version = ++revision;
+    const version = ++refreshRevision;
     const [config, enforced, entitled] = await Promise.all([
       getSessionLockConfig(),
       isSessionLockEnforced(),
       hasFeature('session_lock'),
     ]);
-    if (disposed || version !== revision) return;
+    if (disposed || version !== refreshRevision) return;
+    const nextSetupRequired = enforced && !config.pinHash;
+    const nextEnabled = enforced || (entitled && config.enabled && !!config.pinHash);
+    const nextTimeout = Number.isFinite(config.timeoutMs)
+      ? Math.max(1000, config.timeoutMs)
+      : 300_000;
+    // Renewing the signed entitlement is not user activity. Keep both the idle
+    // deadline and an existing lock's unlock callback when access is unchanged.
+    if (
+      configured &&
+      enabled === nextEnabled &&
+      setupRequired === nextSetupRequired &&
+      pinHash === config.pinHash &&
+      timeoutMs === nextTimeout
+    )
+      return;
+    configured = true;
+    revision++;
     siDebug('session-lock', 'configuration applied', {
       enforced,
       entitled,
@@ -113,14 +138,16 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
       hasPin: !!config.pinHash,
     });
     const wasLocked = locked;
+    const wasEnabled = enabled;
     clearTimers();
     handle?.remove();
     handle = undefined;
     locked = false;
-    setupRequired = enforced && !config.pinHash;
-    enabled = enforced || (entitled && config.enabled && !!config.pinHash);
+    setupRequired = nextSetupRequired;
+    enabled = nextEnabled;
     pinHash = config.pinHash;
-    timeoutMs = Number.isFinite(config.timeoutMs) ? Math.max(1000, config.timeoutMs) : 300_000;
+    timeoutMs = nextTimeout;
+    if (enabled && !wasEnabled) lastActivity = Date.now();
     let saved = false;
     try {
       saved = sessionStorage.getItem(LOCKED_FLAG) === '1';

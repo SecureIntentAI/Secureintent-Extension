@@ -1,13 +1,13 @@
 import { formatQuotaReset, type QuotaStatus } from '@/lib/quota';
 
 /** Visual state of a feature row in the "Your plan" checklist. */
-export type FeatureState = 'active' | 'usage' | 'locked';
+export type FeatureState = 'active' | 'usage' | 'locked' | 'soon';
 
 export interface FeatureRow {
   key: string;
   label: string;
   state: FeatureState;
-  /** Right-column text: "Active" | "Unlimited" | "9 / 10 left" | "Pro" | "Business". */
+  /** Right-column text: "Active" | "Unlimited" | "9 / 10 left" | "Pro" | "Business" | "Coming soon". */
   detail: string;
   /** One-line explanation shown in the "?" tooltip beside the label. */
   note: string;
@@ -73,10 +73,17 @@ const BUSINESS_TOOLKIT: ReadonlyArray<{ key: string; label: string; note: string
     label: 'Team Policy Sync',
     note: 'Push shared detection rules and settings across your whole team.',
   },
+];
+
+/**
+ * Not available yet on any plan: security alerts arrive with the SecureIntent
+ * desktop app. The team console's Alerts page is a preview until then.
+ */
+const COMING_SOON: ReadonlyArray<{ key: string; label: string; note: string }> = [
   {
     key: 'team_alerts',
     label: 'Security-Team Alerts',
-    note: 'Notify your security team when a teammate is caught pasting a secret.',
+    note: 'Coming with the SecureIntent desktop app: notify your security team when a teammate pastes a secret.',
   },
 ];
 
@@ -154,10 +161,12 @@ export function buildPlanView(input: {
         ? { ...f, state: 'active' as const, detail: 'Active' }
         : { ...f, state: 'locked' as const, detail: 'Business' },
     ),
+    ...COMING_SOON.map((f) => ({ ...f, state: 'soon' as const, detail: 'Coming soon' })),
   ];
 
   return {
-    planLabel: PLAN_LABEL[plan],
+    planLabel:
+      plan === 'business_pro' && org?.role === 'org:member' ? 'Developer Pro' : PLAN_LABEL[plan],
     isPro: pro,
     org: org ? { name: org.name ?? 'your team', isAdmin: org.role === 'org:admin' } : null,
     // Clamped: a negative or fractional count could only come from a bug, and

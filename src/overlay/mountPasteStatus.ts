@@ -1,8 +1,20 @@
 import { type ContentScriptContext, createShadowRootUi } from '#imports';
 
-export type PasteStatus = 'checking' | 'too-large';
+export type PasteStatus = 'checking' | 'too-large' | 'busy' | 'expired' | 'error';
 
 const messages: Record<PasteStatus, [string, string]> = {
+  error: [
+    'Paste could not be completed',
+    'SecureIntent could not confirm the paste. Check the editor before trying again.',
+  ],
+  busy: [
+    'Too many pending pastes',
+    'This additional paste was not queued. Finish the current paste, then try again.',
+  ],
+  expired: [
+    'Pending paste expired',
+    'Paste the text again so SecureIntent can check it at the current cursor position.',
+  ],
   checking: ['Checking paste…', 'You can cancel while SecureIntent checks this text.'],
   'too-large': [
     'Paste is too large',

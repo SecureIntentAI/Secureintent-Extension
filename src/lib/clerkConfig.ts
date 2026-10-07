@@ -1,7 +1,9 @@
 // Clerk publishable key — safe to ship in the client (it is not a secret).
 // Provided at build time via WXT env: set WXT_CLERK_PUBLISHABLE_KEY in ext/.env.
 export const CLERK_PUBLISHABLE_KEY =
-  import.meta.env.WXT_E2E === '1' || import.meta.env.WXT_SHADOW_DEMO === '1' ? '' : (import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '');
+  import.meta.env.WXT_E2E === '1' || import.meta.env.WXT_SHADOW_DEMO === '1'
+    ? ''
+    : (import.meta.env.WXT_CLERK_PUBLISHABLE_KEY ?? '');
 
 /** The custom Clerk JWT template that carries email + public_metadata claims. */
 export const CLERK_JWT_TEMPLATE = 'secureintent';
@@ -26,11 +28,12 @@ export const WEB_APP_URL = import.meta.env.WXT_WEB_APP_URL ?? 'https://secureint
  */
 export const ACCOUNT_URL = `${WEB_APP_URL}/account.html`;
 
-/** The team console: seats, members, and what the team's extensions are stopping. */
-export const TEAM_URL = `${WEB_APP_URL}/team.html`;
+/** The team console's canonical landing view. Opening the final hash directly
+ * avoids a visible `/team.html` -> `/team.html#/overview` router transition. */
+export const TEAM_URL = `${WEB_APP_URL}/team.html#/overview`;
 
-/** Live organisation Shadow AI activity and policy dashboard. */
-export const SHADOW_DASHBOARD_URL = `${WEB_APP_URL}/shadow.html`;
+/** Live organisation Shadow AI view inside the Business team console. */
+export const SHADOW_DASHBOARD_URL = `${WEB_APP_URL}/team.html#/shadow`;
 
 /** True on the Firefox build (MV2). Auth takes the cookie path here, not the SDK. */
 export const IS_FIREFOX = import.meta.env.BROWSER === 'firefox';
@@ -46,8 +49,9 @@ export const isAuthEnabled = () => CLERK_PUBLISHABLE_KEY.length > 0;
  *      "Missing host_permissions entry" and crashes the popup.
  *   2. It mints tokens from the extension origin, and Firefox's random
  *      `moz-extension://<uuid>` origin can't be added to Clerk `allowed_origins`.
- * Firefox instead reads the web-app session token from the cookie and verifies it
- * server-side (no origin check). See docs/FIREFOX_LAUNCH.md §1.
+ * Firefox reads the web-app session cookie and renews expired JWTs through the
+ * backend using the HttpOnly Clerk client proof. The backend verifies both the
+ * live session and issued JWT. See docs/FIREFOX_LAUNCH.md §1.
  */
 export const isClerkSdkEnabled = () => isAuthEnabled() && !IS_FIREFOX;
 

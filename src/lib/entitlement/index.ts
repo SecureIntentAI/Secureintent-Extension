@@ -93,6 +93,8 @@ export interface EntitlementSnapshot {
   source: ActiveEntitlement['source'];
   pro: boolean;
   signedIn: boolean;
+  /** Verified local identity used to bind queued delivery. Never sent as telemetry. */
+  userId: string | null;
   businessDomain: string | null;
   /** The team this seat belongs to, so events can be grouped by company. */
   orgId: string | null;
@@ -112,6 +114,7 @@ const FREE_SNAPSHOT: EntitlementSnapshot = {
   source: 'none',
   pro: false,
   signedIn: false,
+  userId: null,
   businessDomain: null,
   orgId: null,
   orgName: null,
@@ -153,6 +156,10 @@ async function computeCache(): Promise<{
       source: ent.source,
       pro: ent.pro,
       signedIn: stored !== null,
+      userId:
+        ent !== FREE_ENTITLEMENT && typeof signed?.clerkUserId === 'string'
+          ? signed.clerkUserId
+          : null,
       businessDomain: ent.businessDomain,
       orgId: ent.org?.id ?? null,
       orgName: ent.org?.name ?? null,

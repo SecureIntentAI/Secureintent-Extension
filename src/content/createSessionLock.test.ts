@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { DEFAULT_BUNDLE, saveBundle } from '@/lib/config';
+import { entitlementItem } from '@/lib/entitlement';
 import type { Salt } from '@/lib/fingerprint';
 import { hashPin } from '@/lib/lock';
-import { sessionLockPinHashItem } from '@/settings';
+import { sessionLockPinHashItem, sessionLockTimeoutItem } from '@/settings';
 import { createSessionLock } from './createSessionLock';
 
 const { mount } = vi.hoisted(() => ({ mount: vi.fn() }));
@@ -27,6 +28,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   for (const stop of stops) stop();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 const start = () =>
@@ -60,4 +62,56 @@ test('setting the required PIN changes the setup gate to an unlock gate live', a
   expect(await unlock('1234')).toBe(false);
   now += 30_001;
   expect(await unlock('1234')).toBe(true);
+});
+
+const renewEntitlement = () =>
+  entitlementItem.setValue({
+    blob: {
+      clerkUserId: 'test-user',
+      plan: 'business_pro',
+      pro: true,
+      features: ['session_lock'],
+      source: 'org_seat',
+      status: 'active',
+      businessDomain: null,
+      org: { id: 'org_test', name: 'Test', role: 'org:member' },
+      issuedAt: Date.now() / 1000,
+      exp: Date.now() / 1000 + 900,
+    },
+    signature: 'test-renewal',
+  });
+
+test('minute entitlement renewals preserve the idle deadline and existing unlock callback', async () => {
+  await sessionLockPinHashItem.setValue(await hashPin('1234', 'test-salt' as Salt));
+  await enforce();
+  vi.useFakeTimers();
+  await start();
+  for (let minute = 0; minute < 4; minute++) {
+    await vi.advanceTimersByTimeAsync(60_000);
+    await renewEntitlement();
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(mount).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(mount).toHaveBeenCalledTimes(1);
+  const unlock = mount.mock.calls[0][1].onUnlock;
+  await renewEntitlement();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mount).toHaveBeenCalledTimes(1);
+  expect(await unlock('1234')).toBe(true);
+  await vi.advanceTimersByTimeAsync(299_999);
+  expect(mount).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(mount).toHaveBeenCalledTimes(2);
+});
+
+test('shortening the timeout accounts for time already spent idle', async () => {
+  await sessionLockPinHashItem.setValue(await hashPin('1234', 'test-salt' as Salt));
+  await enforce();
+  vi.useFakeTimers();
+  await start();
+  await vi.advanceTimersByTimeAsync(120_000);
+  await sessionLockTimeoutItem.setValue(60_000);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mount).toHaveBeenCalledTimes(1);
 });

@@ -18,12 +18,12 @@ in [`wxt.config.ts`](../wxt.config.ts).
 | Chrome-only `key` stripped from Firefox manifest | ✅ confirmed in candidate manifest |
 | `web-ext lint` | ⏳ not run against the v1.2.0 candidate |
 | Extension zip + sources zip | ✅ generated; `.env` and local test artifacts excluded from sources |
-| Firefox runtime smoke test | ⏳ outstanding |
+| Firefox runtime smoke test | Passed in system Firefox ESR with local integration fixtures; live provider checks pending |
 
 **Artifacts to upload** (in `dist/`):
-- `secureintent-extension-1.2.0-firefox.zip` — local candidate package; submit only after release approval
-- `secureintent-extension-1.2.0-sources.zip` — source for reviewers (see §6; required)
-- `secureintent-extension-1.2.0-SHA256SUMS.txt` — checksums for the Chrome, Firefox, and source ZIPs
+- `final2.firefox.zip` — release candidate package; submit only after release approval
+- `final2-sources.zip` — source for reviewers (see §6; required)
+- `final2-SHA256SUMS.txt` — checksums for the Chrome, Firefox, and source ZIPs
 
 Regenerate the package with: `pnpm zip:firefox`. Regenerate the source archive from the
 current release worktree while excluding `.env`, dependencies, generated bundles, and
@@ -31,81 +31,61 @@ local test artifacts.
 
 ---
 
-## 1. Clerk auth on Firefox — SOLVED (Pro works)
+## 1. Clerk authentication on Firefox
 
-> **Status: implemented.** Pro works on Firefox via a cookie + server-side-verify path
-> (Option B below). This section documents why the SDK path fails on Firefox and how the
-> implemented path avoids it. No free-only gating — Firefox gets full Pro.
+The Firefox MV2 build uses the same Clerk identity and backend account/organization
+resolution as Chrome. Its background reads the configured web-app and Clerk FAPI
+cookies with the privileged cookies API.
 
-### What was implemented
-- **Token (Firefox):** the background reads the web app's Clerk `__session` JWT straight
-  from the cookie via the privileged `browser.cookies` API
-  ([`src/services/cookieToken.ts`](../src/services/cookieToken.ts)) instead of minting one
-  through the chrome-extension SDK. That token was issued to the **web app origin**
-  (allowlisted), never the extension origin.
-- **Verify (backend):** the Worker verifies it with `@clerk/backend verifyToken` (JWKS,
-  no origin check) and, because the default cookie token lacks the templated
-  `email`/`public_metadata` claims, hydrates them via `clerkClient.users.getUser`
-  ([`backend/src/lib/clerkAuth.ts` `hydrateClaims`](../../backend/src/lib/clerkAuth.ts)).
-- **Popup (Firefox):** no `ClerkProvider` (it would crash — see below). `AccountSection`
-  renders a cookie/entitlement-driven bar; sign-in/manage opens the web account page.
-- **Flags:** `isClerkSdkEnabled()` (Chrome only) vs `isAuthEnabled()` (both) in
-  [`src/lib/clerkConfig.ts`](../src/lib/clerkConfig.ts).
+- A fresh session JWT is sent to the existing API. An expired JWT is renewed through
+  `POST /v1/auth/session/refresh` using the HttpOnly FAPI `__client` credential.
+- The backend verifies the client with Clerk, checks its active session belongs to
+  that client and user, and checks session status, expiration and abandonment.
+  It issues a fixed 60-second token and verifies the result. An expired JWT alone
+  never authorizes renewal.
+- Renewal requests are coalesced and cached in background memory. Tokens and client
+  proofs are not placed in extension storage, telemetry, URLs or logs.
+- Cookie changes invalidate pending requests and refresh account/policy state.
+  Explicit sign-out or rejected session proof clears cached entitlement. Provider
+  outages use bounded retries and preserve the same user's last signed policy.
+- Instance-specific cookie suffixes are derived from the configured publishable key.
+  An expired web cookie cannot mask a fresh copy for the same session on FAPI.
+- The backend requires the new IP and client rate-limit bindings. Missing bindings
+  or provider failures return retryable errors; rollout requires the matching backend.
 
-**Flow:** user signs in on `account.html` (web Clerk works fine in Firefox) → the session
-cookie is set → the extension reads it → Worker returns a **signed entitlement valid for
-days** → Pro unlocks. The Clerk cookie can go stale between visits, but the signed
-entitlement has its own TTL, so Pro persists; it refreshes whenever the user reopens the
-app/popup. Fails safe (keeps last-known entitlement on any error).
+The backend verifies token signatures and configured authorized parties, then
+hydrates missing default-token email claims and resolves current D1 Business
+membership. A valid sign-in alone does not activate a Business workspace.
 
-> **Requires a backend deploy** (`wrangler deploy`) for the `hydrateClaims` change —
-> without it, Firefox Pro via **Paddle** (keyed by user id) still resolves, but **lifetime
-> + business-email** tiers (keyed by email) won't until deployed.
+Chrome continues using `@clerk/chrome-extension`. Firefox does not mount that SDK's
+ClerkProvider: the installed SDK requires an MV3 `host_permissions` manifest field,
+and a random `moz-extension://` origin cannot use Chrome's pinned origin allowlist.
+The popup opens the ordinary website account page for sign-in and account management.
 
-### Why the chrome-extension SDK itself can't run on Firefox (background)
+### Verification
 
-Auth on Chrome uses **`@clerk/chrome-extension`** (popup `ClerkProvider`/`useUser` +
-background `createClerkClient`).
+A real Firefox ESR browser has exercised the new renewal flow against local backend
+routes with a simulated Clerk provider: signed entitlement and policy, managed-member
+notice, trusted paste enforcement, account switching and revoked-session rejection.
+A separate simultaneous Chrome/Firefox test uses the actual Worker runtime, D1,
+SQLite PolicyHub and native WebSockets. One admin save reaches both browsers without
+polling or reconnecting, updates their notices and receipts, and changes enforcement
+in already-open tabs. Another organization's connection receives no publication.
+This does not establish real production Clerk renewal or AMO approval.
 
-**The SDK code itself IS cross-browser.** Verified against the installed package
-(`@clerk/chrome-extension@3.1.42`): it imports `browser` from the bundled
-**`webextension-polyfill`** and uses standard `browser.cookies.*` / `browser.storage.*`
-— **no raw `chrome.*` calls, no Manifest V3 requirement**. It runs in our Firefox MV2
-build. "Chrome Extension" is branding, not a technical limit.
+Run the opt-in integration from `secureintent-backend-v2`:
 
-**The actual blocker is Clerk's origin allowlist vs Firefox's random origins:**
+```sh
+SI_BROWSER_INTEGRATION=1 pnpm exec vitest run --no-file-parallelism test/extension-browser.integration.test.ts test/extension-policy-live.integration.test.ts
+```
 
-- Clerk requires the extension origin in **`allowed_origins`**, and **every** Clerk API
-  call — including the ~60-second **token refresh** — is validated against it. Sync Host
-  does **not** remove this (confirmed in Clerk's sync-host docs).
-- **Chrome:** one fixed `chrome-extension://<id>` (our pinned `key`) → allowlist once. ✅
-- **Firefox:** the runtime origin is `moz-extension://<random-UUID>`, **different for
-  every user's install**. `gecko.id` fixes the add-on *identity*, NOT the runtime origin
-  UUID (per MDN). Clerk `allowed_origins` takes literal origins — **no wildcard**
-  (`moz-extension://*` is not supported/documented).
-- ⇒ You **cannot pre-allowlist** Firefox users. Sign-in appears to work, then the first
-  token refresh hits the Frontend API from an un-allowlisted origin and **fails within
-  ~1 minute**. This is why it will not "just work."
+Keep these files sequential: their temporary browser builds share WXT's generated
+type directory. The test builds do not replace the production packages.
 
-Two SDK-specific blockers (both avoided by the cookie path above):
-
-1. **Popup crash — MV2 manifest.** `ClerkProvider` hard-requires an MV3-style
-   `host_permissions` key. The Firefox build is MV2 (host perms fold into `permissions`),
-   so it throws *"Missing host_permissions entry"* and blanks the popup. → We don't mount
-   `ClerkProvider` on Firefox.
-2. **Origin allowlist.** Clerk validates every FAPI call (incl. the ~60s token refresh)
-   against `allowed_origins`. Chrome has one fixed `chrome-extension://<id>`; Firefox gives
-   each install a random `moz-extension://<uuid>` that can't be allowlisted (no wildcard,
-   and `gecko.id` fixes only the add-on identity, not the runtime origin — per MDN). → We
-   never mint tokens from the extension origin; we read the web-app cookie instead.
-
-### Verify in a real Firefox
-1. `pnpm build:firefox` (and deploy the backend for lifetime/business tiers).
-2. `about:debugging` → This Firefox → Load Temporary Add-on → pick `dist/firefox-mv2/manifest.json`.
-3. Free-path smoke test: paste a fake key on chatgpt.com → overlay works (no auth needed).
-4. Pro path: sign in on `account.html`, then open the extension popup → the account bar
-   should show your Pro plan, and Pro features unlock. It should **persist** past a minute
-   (the signed entitlement is cached), unlike the old SDK path.
+Build the production target with `pnpm build:firefox`. The requested package names
+are `dist/final2.firefox.zip` and `dist/final2.firefox/`. Load its manifest through
+`about:debugging` for a temporary installation. See [hardening.md](./hardening.md)
+for the current evidence and remaining live release checks.
 
 ---
 
@@ -122,8 +102,8 @@ Two SDK-specific blockers (both avoided by the cookie path above):
 
 1. **Developer Hub → Submit a New Add-on.**
 2. Distribution: **On this site (listed)**.
-3. Upload `dist/secureintent-extension-1.2.0-firefox.zip` only after the release gates pass. Wait for the automated validation (0 errors expected).
-4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/secureintent-extension-1.2.0-sources.zip`. Paste the reviewer notes from §6.
+3. Upload `dist/final2.firefox.zip` only after the release gates pass. Wait for the automated validation (0 errors expected).
+4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/final2-sources.zip`. Paste the reviewer notes from §6.
 5. Answer the **data collection** questions using §5.
 6. Fill the **listing** using §4.
 7. Submit for review.
@@ -239,8 +219,8 @@ WXT can submit straight to AMO with API keys:
 ```bash
 # store the AMO issuer/secret as env or in .env.submit (never commit)
 npx wxt submit \
-  --firefox-zip dist/secureintent-extension-1.2.0-firefox.zip \
-  --firefox-sources-zip dist/secureintent-extension-1.2.0-sources.zip
+  --firefox-zip dist/final2.firefox.zip \
+  --firefox-sources-zip dist/final2-sources.zip
 ```
 
 Requires `AMO_JWT_ISSUER` / `AMO_JWT_SECRET` (from §2). Same review applies.

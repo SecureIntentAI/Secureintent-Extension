@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <title>Real Draft.js paste regression fixture</title>
+  <link rel="stylesheet" href="/assets/Draft.css">
+  <style>
+    body { font: 16px sans-serif; margin: 30px; }
+    .editor { border: 1px solid #999; width: 620px; min-height: 180px; padding: 16px; }
+    pre { white-space: pre-wrap; }
+  </style>
+  <body>
+    <h1>Draft.js editor</h1>
+    <div id="root"></div>
+    <script src="/assets/immutable.min.js"></script>
+    <script src="/assets/react.production.min.js"></script>
+    <script src="/assets/react-dom.production.min.js"></script>
+    <script src="/assets/Draft.min.js"></script>
+    <script>
+      // This is the published Draft.js editor, not an imitation of its paste
+      // handler. The outputs below read ContentState, independently of the DOM.
+      const h = React.createElement;
+      class EditorFixture extends React.Component {
+        constructor(props) {
+          super(props);
+          this.state = { editor: Draft.EditorState.createEmpty(), saved: '' };
+        }
+        render() {
+          return h(React.Fragment, null,
+            h('div', { className: 'editor' }, h(Draft.Editor, {
+              editorState: this.state.editor,
+              onChange: editor => this.setState({ editor }),
+              placeholder: 'Compose a post',
+              spellCheck: false
+            })),
+            h('button', {
+              id: 'save',
+              onClick: () => this.setState({
+                saved: this.state.editor.getCurrentContent().getPlainText('\n')
+              })
+            }, 'Save draft'),
+            h('button', {
+              id: 'reopen',
+              onClick: () => this.setState({
+                editor: Draft.EditorState.createWithContent(
+                  Draft.ContentState.createFromText(this.state.saved)
+                )
+              })
+            }, 'Reopen draft'),
+            h('h2', null, 'Editor model'),
+            h('pre', { id: 'model' }, this.state.editor.getCurrentContent().getPlainText('\n')),
+            h('h2', null, 'Saved draft'),
+            h('pre', { id: 'saved' }, this.state.saved)
+          );
+        }
+      }
+      ReactDOM.render(h(EditorFixture), document.getElementById('root'));
+      const receivedPastes = [];
+      window.addEventListener('paste', event => {
+        receivedPastes.push({
+          text: event.clipboardData.getData('text/plain'),
+          html: event.clipboardData.getData('text/html'),
+          trusted: event.isTrusted
+        });
+        document.body.dataset.receivedPastes = JSON.stringify(receivedPastes);
+      }, true);
+    </script>
+  </body>
+</html>

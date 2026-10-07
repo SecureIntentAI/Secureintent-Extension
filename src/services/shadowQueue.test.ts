@@ -52,13 +52,14 @@ test('1,000 simultaneous observations survive serialized storage updates', async
   expect((await state()).queue).toHaveLength(1000);
   expect(new Set((await state()).queue.map((e: { eventId: string }) => e.eventId)).size).toBe(1000);
 });
-test('a record arriving during upload is not overwritten by its acknowledgement', async () => {
-  await recordShadow(visit(), sender);
+test('a record arriving during upload and an unacknowledged report stay queued', async () => {
+  const first = visit();
+  await recordShadow(first, sender);
   let release!: (ids: string[]) => void;
   vi.mocked(sendShadowEvents).mockImplementationOnce(
-    (_t, events) =>
+    () =>
       new Promise((resolve) => {
-        release = () => resolve(events.map((e) => e.eventId));
+        release = (ids) => resolve(ids);
       }),
   );
   const sending = flushShadow();
@@ -67,7 +68,10 @@ test('a record arriving during upload is not overwritten by its acknowledgement'
   const recording = recordShadow(next, sender);
   release([]);
   await Promise.all([sending, recording]);
-  expect((await state()).queue.map((e: { eventId: string }) => e.eventId)).toEqual([next.eventId]);
+  expect((await state()).queue.map((e: { eventId: string }) => e.eventId)).toEqual([
+    first.eventId,
+    next.eventId,
+  ]);
 });
 test('revoked consent discards queued data without uploading', async () => {
   await recordShadow(visit(), sender);

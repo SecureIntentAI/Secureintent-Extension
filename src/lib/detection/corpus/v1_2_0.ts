@@ -70,8 +70,8 @@ export const detectorCorpusV1_2_0 = {
       text: 'SERVICE_PASSWORD="correct horse battery staple"',
       expected: [
         {
-          label: 'Credential assignment',
-          match: 'SERVICE_PASSWORD="correct horse battery staple"',
+          label: 'Structured credential',
+          match: 'correct horse battery staple',
         },
       ],
     },

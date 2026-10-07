@@ -5,7 +5,14 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react', '@wxt-dev/auto-icons'],
   srcDir: 'src',
   publicDir: 'src/public',
-  outDir: process.env.WXT_E2E === '1' ? 'dist-e2e' : process.env.WXT_SHADOW_DEMO === '1' ? 'dist-demo' : 'dist',
+  outDir:
+    process.env.WXT_E2E === '1'
+      ? 'dist-e2e'
+      : process.env.WXT_PILOT === '1'
+        ? 'dist-pilot'
+        : process.env.WXT_SHADOW_DEMO === '1'
+          ? 'dist-demo'
+          : 'dist',
   // Rasterizes src/assets/icon.svg into all manifest icon sizes at build time.
   autoIcons: {
     baseIconPath:
@@ -27,14 +34,13 @@ export default defineConfig({
     // The standalone local demo gets its own extension ID so it can coexist
     // with the installed extension. The E2E Shadow demo replaces the existing
     // dist-e2e artifact, so retain its pinned E2E ID for a normal Reload.
-    const standaloneShadowDemo =
-      process.env.WXT_SHADOW_DEMO === '1' && process.env.WXT_E2E !== '1';
+    const standaloneShadowDemo = process.env.WXT_SHADOW_DEMO === '1' && process.env.WXT_E2E !== '1';
     // Local end-to-end testing: when the build is pointed at a localhost Worker or
     // a locally served landing page, the extension needs permission to reach them
     // (fetch the API, read the creator cookie). Never present in a shipped build —
     // these env vars are unset in CI and in a normal `pnpm build`.
     const localHosts = [process.env.WXT_API_BASE, process.env.WXT_WEB_APP_URL]
-      .filter((u): u is string => Boolean(u?.startsWith('http://localhost')))
+      .filter((u): u is string => Boolean(u && !u.startsWith('https://api.secureintent.ai')))
       .map((u) => `${new URL(u).origin}/*`);
     return {
       // Chrome-only: pins the extension ID (ejdhcakapnkbmfihgoamdnajgimhemof) so
@@ -44,12 +50,20 @@ export default defineConfig({
       ...(isFirefox || standaloneShadowDemo
         ? {}
         : {
-            minimum_chrome_version: '109', // private offscreen Worker host
+            minimum_chrome_version: '116', // WebSocket traffic keeps the policy service worker active
             key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6OipE3Igc3/YZr0H+I3aWot4xOqHvMyGHWuoyxpfIv6gISMyk2tWNjqAmSeMULt1EBgXvv44xdFPfWP8KUtbcr3tEgADXWFB0L6zI6GbFVdtm4Y3T/iXGLGQ3SN+yZQFPHQppY/NtXhM7d0LkAfXgL/pE6BySJzD1k8O/xlmRBuTjIOG538B5atOQO//YTSVDkKkJH9ZhOPqsbdyq5qc3R01szbD1oa2cBcteNpseI0Xp0X1LJLCq2ESfZKYxvzYJAaE7bQTcof4WUQL87gKN87NR2fQzIlwmYDg6n4BHDfwuUi3fNyuIlOemw9ugf+bSQYlsgqxdIT80GRW+M5eVwIDAQAB',
           }),
-      name: process.env.WXT_SHADOW_DEMO === '1' ? 'SecureIntent · Local Shadow AI Demo' : 'SecureIntent',
+      name:
+        process.env.WXT_PILOT === '1'
+          ? 'SecureIntent · Business Pilot'
+          : process.env.WXT_SHADOW_DEMO === '1'
+            ? 'SecureIntent · Local Shadow AI Demo'
+            : 'SecureIntent',
       action: {
-        default_title: process.env.WXT_SHADOW_DEMO === '1' ? 'SecureIntent · Local Shadow AI Demo' : 'SecureIntent',
+        default_title:
+          process.env.WXT_SHADOW_DEMO === '1'
+            ? 'SecureIntent · Local Shadow AI Demo'
+            : 'SecureIntent',
         default_popup: 'popup.html',
       },
       description:
@@ -71,7 +85,8 @@ export default defineConfig({
       ],
       // Privileged access to our Worker so the background config sync + content-script
       // telemetry fetches bypass page CORS, plus the Clerk Frontend API for auth.
-      host_permissions: [
+      // De-duplicated: a production WXT_WEB_APP_URL already appears below.
+      host_permissions: [...new Set([
         'https://api.secureintent.ai/*',
         // Sync Host — the web app whose Clerk session the extension mirrors.
         'https://secureintent.ai/*',
@@ -79,9 +94,10 @@ export default defineConfig({
         'https://clerk.secureintent.ai/*',
         // Needed so an already-open tab can receive the paste guard on install.
         // The content scripts already run on these pages after a reload.
-        ...(isFirefox ? [] : ['http://*/*', 'https://*/*']),
+        'http://*/*',
+        'https://*/*',
         ...localHosts,
-      ],
+      ])],
       // Firefox-only: AMO requires a stable add-on id, a minimum-version floor
       // (storage.session needs FF 115+), and — for all new add-ons — the
       // data_collection_permissions key. Core protection collects nothing

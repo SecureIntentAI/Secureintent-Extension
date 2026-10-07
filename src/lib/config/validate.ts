@@ -47,7 +47,7 @@ function validPolicy(v: unknown): boolean {
   if (!p.blockedSites.every((s) => typeof s === 'string')) return false;
   if (
     p.orgId !== undefined &&
-    (typeof p.orgId !== 'string' || !/^org_[A-Za-z0-9]{1,60}$/.test(p.orgId))
+    (typeof p.orgId !== 'string' || !/^(?:org_[A-Za-z0-9]{1,60}|org_si_[a-f0-9]{32})$/.test(p.orgId))
   )
     return false;
   if (p.aiServices !== undefined) {

@@ -21,39 +21,51 @@ import { getClerkTokenFromCookie, getClerkUserIdFromCookie } from './cookieToken
  */
 export async function getClerkToken(): Promise<string | null> {
   if (!isAuthEnabled()) return null;
-  // Firefox: read the web-app session JWT from the cookie (the SDK can't mint one
-  // from the extension origin). The Worker hydrates missing claims server-side.
-  if (IS_FIREFOX) return getClerkTokenFromCookie();
-  const clerk = await createClerkClient({
-    publishableKey: CLERK_PUBLISHABLE_KEY,
-    syncHost: CLERK_SYNC_HOST,
-    background: true,
+  // Config, connection reports and stream leases also call this outside the
+  // entitlement refresh deadline. A stuck SDK must not pin those loops forever.
+  return withDeadline(async (signal) => {
+    // Firefox uses the web-app session cookie; missing claims are hydrated by the API.
+    if (IS_FIREFOX) return abortable(getClerkTokenFromCookie(), signal);
+    const clerk = await abortable(
+      createClerkClient({
+        publishableKey: CLERK_PUBLISHABLE_KEY,
+        syncHost: CLERK_SYNC_HOST,
+        background: true,
+      }),
+      signal,
+    );
+    if (!clerk.session) return null;
+    return abortable(clerk.session.getToken({ template: CLERK_JWT_TEMPLATE }), signal);
   });
-  if (!clerk.session) return null;
-  return clerk.session.getToken({ template: CLERK_JWT_TEMPLATE });
 }
 
 let pendingRefresh: { controller: AbortController; promise: Promise<RefreshResult> } | undefined;
+const SUPERSEDED = 'superseded';
 
 /** A session change must not reuse, or be overwritten by, an older refresh. */
 export function invalidateEntitlementRefresh(): void {
   const previous = pendingRefresh;
   pendingRefresh = undefined;
-  previous?.controller.abort();
+  previous?.controller.abort(SUPERSEDED);
 }
 
-/** Share concurrent popup/startup refreshes; release the request on failure/timeout. */
-export function refreshEntitlementBg(): Promise<RefreshResult> {
+/**
+ * Share concurrent popup/startup refreshes; release the request on failure/timeout.
+ * A refresh cancelled by a session change answers with a fresh check for the
+ * new session (once), so a waiting popup never reports that as a failure.
+ */
+export function refreshEntitlementBg(retryIfSuperseded = true): Promise<RefreshResult> {
   if (pendingRefresh) return pendingRefresh.promise;
   const controller = new AbortController();
   const promise = withDeadline(async (signal) => {
     const result = await refreshEntitlement(getClerkToken, signal);
     // Even when the API is offline, reject a cached plan belonging to a
     // different known session. Keep this check inside the shared pipeline.
-    await enforceEntitlementBinding(signal);
+    const identityChanged = await enforceEntitlementBinding(signal);
     // A policy belongs to a seat, not an installation. Never leave the old
     // team's rules/custom patterns attached after a confirmed identity change.
     if (
+      identityChanged ||
       result.status === 'signed-out' ||
       result.status === 'updated' ||
       result.status === 'cleared'
@@ -69,12 +81,14 @@ export function refreshEntitlementBg(): Promise<RefreshResult> {
     }
     return result;
   }, controller)
-    .catch(
-      (error): RefreshResult => ({
+    .catch((error): RefreshResult | Promise<RefreshResult> => {
+      if (retryIfSuperseded && controller.signal.reason === SUPERSEDED)
+        return refreshEntitlementBg(false);
+      return {
         status: 'error',
         error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+      };
+    })
     .then((result) => {
       siDebug('entitlement', 'bg refresh', { status: result.status, plan: result.plan ?? null });
       return result;
@@ -114,9 +128,9 @@ export async function getClerkUserId(): Promise<string | null> {
  * different user id), never when the session id can't be read, so a legitimate
  * user is never wrongly downgraded to free.
  */
-export async function enforceEntitlementBinding(signal?: AbortSignal): Promise<void> {
+export async function enforceEntitlementBinding(signal?: AbortSignal): Promise<boolean> {
   const stored = await entitlementItem.getValue();
-  if (!stored) return;
+  if (!stored) return false;
   const userId = await (signal ? abortable(getClerkUserId(), signal) : getClerkUserId());
   signal?.throwIfAborted();
   if (userId && stored.blob.clerkUserId !== userId) {
@@ -126,10 +140,12 @@ export async function enforceEntitlementBinding(signal?: AbortSignal): Promise<v
       latest?.signature !== stored.signature ||
       latest?.blob.clerkUserId !== stored.blob.clerkUserId
     )
-      return;
+      return false;
     siDebug('entitlement', 'binding mismatch — clearing', { current: userId });
     await entitlementItem.setValue(null);
+    return true;
   }
+  return false;
 }
 
 /** GET the signed-in user's Anonymise & Paste allowance from the Worker. */

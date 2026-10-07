@@ -28,7 +28,7 @@ test.beforeEach(async ({ context }) => {
   });
 });
 
-test('a second paste stays blocked until the first warning is resolved', async ({ context }) => {
+test('a queued second paste is checked after the first warning is resolved', async ({ context }) => {
   const page = await context.newPage();
   await page.route(SITE, (r) => r.fulfill({ contentType: 'text/html', body: HTML }));
   await page.goto(SITE);
@@ -42,6 +42,9 @@ test('a second paste stays blocked until the first warning is resolved', async (
   await paste(page, OTHER);
   await expect(page.locator('#ta')).toHaveValue('');
   await expect(overlay).toHaveCount(1);
+  await overlay.getByRole('button', { name: 'Cancel', exact: true }).last().click();
+  await expect(overlay).toHaveCount(1);
+  await expect(page.locator('#ta')).toHaveValue('');
   await overlay.getByRole('button', { name: 'Cancel', exact: true }).last().click();
   await expect(overlay).toHaveCount(0);
   await page.locator('#ta').click();
@@ -167,12 +170,11 @@ test('a catastrophic regex cannot freeze the page or popup and times out closed'
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(popup.locator('.si-wordmark')).toBeVisible({ timeout: 2000 });
   await popup.close();
-  await expect(status.getByText('Paste could not be completed', { exact: true })).toBeVisible({
-    timeout: 8000,
-  });
+  // The scan times out and fails closed. No blocking dialog (product decision):
+  // the status clears by itself, nothing was pasted, and the next paste is checked.
+  await expect(status).toHaveCount(0, { timeout: 8000 });
   await expect(page.locator('#ta')).toHaveValue('');
   await page.screenshot({ path: test.info().outputPath('worker-timeout.png') });
-  await status.getByRole('button', { name: 'Dismiss' }).click();
   await page.locator('#ta').click();
   await paste(page, SECRET);
   await expect(page.locator('secureintent-overlay')).toHaveCount(1);

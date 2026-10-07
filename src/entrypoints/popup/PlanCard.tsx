@@ -7,6 +7,14 @@ import { getAnonymizeStatus } from '@/lib/quota';
 import { buildPlanView, type FeatureState, type PlanView } from './planFeatures';
 
 function FeatureStateIcon({ state }: { state: FeatureState }) {
+  if (state === 'soon') {
+    return (
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    );
+  }
   if (state === 'locked') {
     return (
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
@@ -93,6 +101,7 @@ async function computeView(): Promise<PlanView> {
     source: ent.source,
     pro: ent.pro,
     signedIn: stored !== null,
+    userId: null, // this snapshot is used only for quota display
     businessDomain: ent.businessDomain,
     orgId: ent.org?.id ?? null,
     orgName: ent.org?.name ?? null,
@@ -166,7 +175,7 @@ export function PlanCard() {
           <span className="si-plan-title">Your plan</span>
         </div>
         <p className="si-plan-error" role="alert">
-          Couldn't load your plan. Detection and warnings are still running — this only affects what
+          Couldn't load your plan. Detection and warnings are still running. This only affects what
           this card can show.
         </p>
         <button type="button" className="si-plan-retry" onClick={() => void load()}>
@@ -227,7 +236,7 @@ export function PlanCard() {
         is their company's seat, and who to ask about it. */}
       {view.org && (
         <p className="si-plan-org">
-          Team seat from <b>{view.org.name}</b> —{' '}
+          Team seat from <b>{view.org.name}</b>:{' '}
           {view.org.isAdmin ? 'you administer this team.' : 'managed by your admin.'}
         </p>
       )}
