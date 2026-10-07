@@ -98,33 +98,23 @@ export async function recordBlocked(n: number): Promise<void> {
 // --- Desktop bridge (SecureIntent desktop agent) ---
 
 /**
- * Off unless the person turns it on.
+ * Whether the SecureIntent desktop app answered the last pairing lookup.
  *
- * The bridge tells a local agent which host the focused tab is on, so one copy
- * isn't warned about twice. That is website activity leaving the browser, even
- * though it only travels to another process on the same machine, so it is a
- * choice rather than a default — and the agent has to work correctly for the
- * many people who never enable it.
+ * There is no switch for the bridge any more: the extension pairs with the
+ * desktop app on its own (see `lib/bridge/pairing.ts`), and whether the two
+ * coordinate is decided in the desktop app, which is what holds the token. This
+ * records only that a desktop app is there, so content scripts can skip
+ * reporting the tab where there is nothing to report it to. It is not the token.
  */
-export const bridgeEnabledItem = storage.defineItem<boolean>('local:si_bridge_enabled', {
+export const bridgeAvailableItem = storage.defineItem<boolean>('local:si_bridge_available', {
   fallback: false,
 });
 
-export const isBridgeEnabled = () => bridgeEnabledItem.getValue();
-export const setBridgeEnabled = (value: boolean) => bridgeEnabledItem.setValue(value);
-
 /**
- * The desktop app's pairing token, copied from its dashboard.
- *
- * Typed in rather than fetched because there is nothing to fetch it from: the
- * desktop's local API exposes only `/health` and `/scan`, `/scan` already needs
- * this token, and neither sends CORS headers — so a browser would discard the
- * response even if a handout existed. The dashboard shows the token and the
- * endpoint side by side, which makes copying it the shortest honest path.
+ * Storage the manual pairing flow used to write: an on/off switch and a pasted
+ * token, both on disk. Removed on update, so a token pasted into an older
+ * version does not stay behind.
  */
-export const bridgeTokenItem = storage.defineItem<string | null>('local:si_bridge_token', {
-  fallback: null,
-});
-
-export const setBridgeToken = (value: string | null) =>
-  bridgeTokenItem.setValue(value?.trim() || null);
+export async function forgetManualPairing(): Promise<void> {
+  await storage.removeItems(['local:si_bridge_enabled', 'local:si_bridge_token']);
+}

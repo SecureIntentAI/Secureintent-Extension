@@ -39,6 +39,7 @@ import { readVaultEntries, storeVaultEntries } from '@/lib/vault/client';
 import { mountOverlay, type OverlayHandle } from '@/overlay/mount';
 import { mountConsentGate } from '@/overlay/mountConsentGate';
 import { mountPasteStatus, type PasteStatus } from '@/overlay/mountPasteStatus';
+import type { OverlayAction } from '@/overlay/Overlay';
 import { buildEvent, sendTelemetry } from '@/services/telemetryService';
 import { enabledItem, isEnabled, recordBlocked } from '@/settings';
 import { isDraftEditor, pasteIntoDraft } from './draftEditorPaste';
@@ -223,6 +224,19 @@ function insertText(
 // at paste time — preventing a double overlay on the 19 supported sites without
 // maintaining an exclude-list.
 const DEDICATED_FLAG = '__secureintentDedicated__';
+/**
+ * Whether the SecureIntent desktop app says the person restored this exact text
+ * there with Undo in the last minute. The background asks it; with no desktop
+ * app, or one that cannot be asked, the answer is no straight away.
+ */
+async function restoredOnDesktop(digest: string): Promise<boolean> {
+  try {
+    return (await browser.runtime.sendMessage({ type: 'si-bridge-allowed', digest })) === true;
+  } catch {
+    return false;
+  }
+}
+
 function markDedicated(): void {
   (window as unknown as Record<string, boolean>)[DEDICATED_FLAG] = true;
 }
@@ -862,9 +876,18 @@ export async function createPasteGuard(
       // consent gate can call it after the user agrees (first-paste consent).
       const showWarning = async () => {
         if (!live(pending)) return;
-        recordBlocked(scan.total); // popup total; on-device only
-        // per-tab action badge (background owns browser.action)
-        browser.runtime.sendMessage({ type: 'si-detected', count: scan.total }).catch(() => {});
+        // The desktop app redacts on copy, and Undo there is the person saying
+        // they want the real text. Pasting it here straight after is that same
+        // decision, so it is treated as "Paste anyway" rather than asked again.
+        // Only where the raw paste is allowed at all: a team's block policy is
+        // not something an Undo overrides.
+        const undone = allowRawPaste && (await restoredOnDesktop(scan.handledDigest));
+        if (!live(pending)) return;
+        if (!undone) {
+          recordBlocked(scan.total); // popup total; on-device only
+          // per-tab action badge (background owns browser.action)
+          browser.runtime.sendMessage({ type: 'si-detected', count: scan.total }).catch(() => {});
+        }
 
         // Feature-hook seam: registered features observe detections (metadata
         // only — raw text is never passed). Fire-and-forget.
@@ -911,7 +934,7 @@ export async function createPasteGuard(
         // then Pro — the status below reflects Pro OR remaining free allowance.
         const snapshot = getEntitlementSnapshot();
         let quota = null;
-        if (!ghostMode) {
+        if (!ghostMode && !undone) {
           await status(pending, 'checking');
           if (!live(pending)) return;
           quota = await abortable(
@@ -931,6 +954,117 @@ export async function createPasteGuard(
             ? { limit: quota.limit, resetsOn: formatQuotaReset() }
             : undefined;
 
+        const onAction = (action: OverlayAction) =>
+          act(pending, async () => {
+            if (action === 'upgrade') {
+              // Hand off to the background to open the account page — the one
+              // place an already-installed user can actually buy or manage a plan.
+              browser.runtime.sendMessage({ type: 'si-open-upgrade' }).catch(() => {});
+              return;
+            }
+            if (action === 'rehydrate') return; // only the rehydrate overlay emits this
+            // What actually happened, for team telemetry. Set only once an insert
+            // really landed; a refused action is reported as cancelled. A paste
+            // that fails part-way (worker, quota, insert error) sends nothing.
+            let outcome: TelemetryAction = 'cancelled';
+            // `allowRawPaste` is re-checked here, not just in the UI: the
+            // policy has to hold even if the overlay were driven some other
+            // way. Under a block the paste is simply dropped (= cancel).
+            if (action === 'paste') {
+              if (allowRawPaste && (await insert(pending, text))) {
+                outcome = 'paste_anyway';
+                pending.reportOutcome?.('warning_bypassed');
+              }
+            } else if (
+              action === 'sanitize' &&
+              proAction &&
+              hasFeatureCached('ghost') &&
+              !destinationBlocked
+            ) {
+              // Ghost: strip every finding to a typed placeholder. Irreversible.
+              await status(pending, 'checking');
+              if (!live(pending)) return;
+              const sanitized = await processor.request('sanitize', null);
+              if (
+                hasFeatureCached('ghost') &&
+                live(pending) &&
+                (await insert(pending, sanitized))
+              ) {
+                outcome = 'sanitised';
+                pending.reportOutcome?.('sanitised');
+              }
+            } else if (action === 'redact' && proAction && !destinationBlocked) {
+              // The preview can become stale while the warning is open. Do
+              // not insert when the actual consume is refused or cancelled.
+              await status(pending, 'checking');
+              if (!live(pending)) return;
+              // Prepare before consuming allowance: an expired/failed worker
+              // must not charge a user for a paste that cannot be produced.
+              const { text: masked, entries } = await processor.request('tokenize', null);
+              if (!live(pending) || !input.isConnected) return;
+              const allowed = await abortable(
+                withDeadline(() => consumeAnonymize(getEntitlementSnapshot())),
+                pending.controller.signal,
+              );
+              if (!allowed) throw new Error('Anonymise allowance is no longer available');
+              if (!live(pending) || !input.isConnected) return;
+              // Dehydrate: replace secrets with reversible tokens and stash the
+              // token→secret map so a later paste can rehydrate them.
+              await storeVaultEntries(entries);
+              if (!live(pending)) return;
+              if (await insert(pending, masked)) {
+                outcome = 'paste_anonymously';
+                pending.reportOutcome?.('sanitised');
+              }
+            }
+            notifyAction({ ...featureCtx, action }); // pro: audit log / team report
+            // We showed a warning for this copy, so the desktop app, if the
+            // person runs it, should not raise its own for the same one. Only
+            // the digest the worker computed leaves this frame, and the
+            // background keys it with the pairing token before anything goes
+            // on the wire; pasted text never travels to the desktop or a
+            // server. With no desktop app, the background drops it.
+            browser.runtime
+              .sendMessage({ type: 'si-bridge-handled', digest: scan.handledDigest })
+              .catch(() => {});
+            if (fingerprintsPromise) {
+              // A refused "paste" inserted nothing, so it is reported as
+              // cancelled, never as paste_anyway. Under a team block it is
+              // `blocked`, matching the Shadow AI ledger.
+              const telemetryAction: TelemetryAction = destinationBlocked ? 'blocked' : outcome;
+              fingerprintsPromise.then((dets) => {
+                if (dets.length === 0) return;
+                sendTelemetry(
+                  buildEvent(
+                    {
+                      site: config.name,
+                      policyVersion: bundle.policyVersion ?? 0,
+                      detections: dets,
+                      action: telemetryAction,
+                      plan: snapshot.plan,
+                      source: snapshot.source,
+                      signedIn: snapshot.signedIn,
+                      businessDomain: snapshot.businessDomain,
+                      orgId: snapshot.orgId,
+                      actorId: snapshot.actorId,
+                    },
+                    snapshot.signedIn && snapshot.userId
+                      ? { userId: snapshot.userId, orgId: snapshot.orgId }
+                      : null,
+                  ),
+                );
+              });
+            }
+          });
+
+        if (undone) {
+          await onAction('paste');
+          siDebug(config.name, 'paste allowed: restored with Undo in the desktop app', {
+            secrets: scan.total,
+          });
+          return;
+        }
+
         const tMount = performance.now();
         await present(pending, () =>
           mountOverlay(ctx, {
@@ -948,107 +1082,7 @@ export async function createPasteGuard(
               ? { host: location.hostname, sensitiveOnly: sensitivePasteBlocked }
               : undefined,
             blockRawPaste: policy.blockInsteadOfWarn,
-            onAction: (action) =>
-              act(pending, async () => {
-                if (action === 'upgrade') {
-                  // Hand off to the background to open the account page — the one
-                  // place an already-installed user can actually buy or manage a plan.
-                  browser.runtime.sendMessage({ type: 'si-open-upgrade' }).catch(() => {});
-                  return;
-                }
-                if (action === 'rehydrate') return; // only the rehydrate overlay emits this
-                // What actually happened, for team telemetry. Set only once an insert
-                // really landed; a refused action is reported as cancelled. A paste
-                // that fails part-way (worker, quota, insert error) sends nothing.
-                let outcome: TelemetryAction = 'cancelled';
-                // `allowRawPaste` is re-checked here, not just in the UI: the
-                // policy has to hold even if the overlay were driven some other
-                // way. Under a block the paste is simply dropped (= cancel).
-                if (action === 'paste') {
-                  if (allowRawPaste && (await insert(pending, text))) {
-                    outcome = 'paste_anyway';
-                    pending.reportOutcome?.('warning_bypassed');
-                  }
-                } else if (
-                  action === 'sanitize' &&
-                  proAction &&
-                  hasFeatureCached('ghost') &&
-                  !destinationBlocked
-                ) {
-                  // Ghost: strip every finding to a typed placeholder. Irreversible.
-                  await status(pending, 'checking');
-                  if (!live(pending)) return;
-                  const sanitized = await processor.request('sanitize', null);
-                  if (
-                    hasFeatureCached('ghost') &&
-                    live(pending) &&
-                    (await insert(pending, sanitized))
-                  ) {
-                    outcome = 'sanitised';
-                    pending.reportOutcome?.('sanitised');
-                  }
-                } else if (action === 'redact' && proAction && !destinationBlocked) {
-                  // The preview can become stale while the warning is open. Do
-                  // not insert when the actual consume is refused or cancelled.
-                  await status(pending, 'checking');
-                  if (!live(pending)) return;
-                  // Prepare before consuming allowance: an expired/failed worker
-                  // must not charge a user for a paste that cannot be produced.
-                  const { text: masked, entries } = await processor.request('tokenize', null);
-                  if (!live(pending) || !input.isConnected) return;
-                  const allowed = await abortable(
-                    withDeadline(() => consumeAnonymize(getEntitlementSnapshot())),
-                    pending.controller.signal,
-                  );
-                  if (!allowed) throw new Error('Anonymise allowance is no longer available');
-                  if (!live(pending) || !input.isConnected) return;
-                  // Dehydrate: replace secrets with reversible tokens and stash the
-                  // token→secret map so a later paste can rehydrate them.
-                  await storeVaultEntries(entries);
-                  if (!live(pending)) return;
-                  if (await insert(pending, masked)) {
-                    outcome = 'paste_anonymously';
-                    pending.reportOutcome?.('sanitised');
-                  }
-                }
-                notifyAction({ ...featureCtx, action }); // pro: audit log / team report
-                // We showed a warning for this copy, so the desktop app — if the
-                // person runs it and has paired it — should not raise its own for
-                // the same one. Only the locally computed hash travels to that
-                // bridge; pasted text never travels to the desktop or a server.
-                // The background drops the hash when the bridge is off.
-                browser.runtime
-                  .sendMessage({ type: 'si-bridge-handled', hash: scan.handledHash })
-                  .catch(() => {});
-                if (fingerprintsPromise) {
-                  // A refused "paste" inserted nothing, so it is reported as
-                  // cancelled, never as paste_anyway. Under a team block it is
-                  // `blocked`, matching the Shadow AI ledger.
-                  const telemetryAction: TelemetryAction = destinationBlocked ? 'blocked' : outcome;
-                  fingerprintsPromise.then((dets) => {
-                    if (dets.length === 0) return;
-                    sendTelemetry(
-                      buildEvent(
-                        {
-                          site: config.name,
-                          policyVersion: bundle.policyVersion ?? 0,
-                          detections: dets,
-                          action: telemetryAction,
-                          plan: snapshot.plan,
-                          source: snapshot.source,
-                          signedIn: snapshot.signedIn,
-                          businessDomain: snapshot.businessDomain,
-                          orgId: snapshot.orgId,
-                          actorId: snapshot.actorId,
-                        },
-                        snapshot.signedIn && snapshot.userId
-                          ? { userId: snapshot.userId, orgId: snapshot.orgId }
-                          : null,
-                      ),
-                    );
-                  });
-                }
-              }),
+            onAction,
           }),
         );
 

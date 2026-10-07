@@ -1,6 +1,7 @@
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
-import { sendBrowserUrl, sendHandledHash } from '@/lib/bridge/client';
+import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from '@/lib/bridge/client';
+import { pairingToken } from '@/lib/bridge/pairing';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL, IS_FIREFOX } from '@/lib/clerkConfig';
 import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
@@ -37,7 +38,7 @@ import {
   TELEMETRY_RETRY_ALARM,
 } from '@/services/telemetryBackground';
 import { installVaultBackground } from '@/services/vaultBackground';
-import { isBridgeEnabled } from '@/settings';
+import { forgetManualPairing } from '@/settings';
 
 const WELCOME_URL = '/welcome.html';
 
@@ -69,7 +70,12 @@ export default defineBackground(() => {
     // Install and reload both need the guard attached to those tabs.
     if (details.reason === 'install' || details.reason === 'update') {
       void injectOpenTabs();
+      // Pairing is automatic now; a token pasted into an older version is not
+      // left sitting in local storage.
+      void forgetManualPairing();
     }
+    // Look for the desktop app now rather than on the first paste.
+    void pairingToken({ fresh: true });
     updateConsentBadge();
     // Nothing of ours runs at uninstall time, so the address the browser opens
     // then has to be registered now — and again at every startup, since a new
@@ -104,6 +110,11 @@ export default defineBackground(() => {
   });
   // Browser restart: retry a report that never made it out (offline at install).
   reportInstall();
+  // A new browser session starts with no cached pairing: ask the desktop app.
+  // Not on every worker wake — that would start the native host each time.
+  browser.runtime.onStartup.addListener(() => {
+    void pairingToken({ fresh: true });
+  });
 
   // Auto-sync entitlement on sign-in / sign-out. Clerk mirrors the web-app
   // session into extension storage; when those keys change we refresh the cached
@@ -145,6 +156,8 @@ export default defineBackground(() => {
       void reconcile(true);
       reportInstall(); // retry an install report that couldn't send (offline at install)
       void flushShadow();
+      // Notice a desktop app installed (or removed) since the last look.
+      void pairingToken({ fresh: true });
     }
   });
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -200,7 +213,8 @@ export default defineBackground(() => {
     // A content script says where its focused tab is. Pass it to the desktop
     // agent so it can tell a local dev server from a real destination. Nothing
     // waits on the answer: the bridge is an optimisation, and a machine with no
-    // agent on it is the normal case rather than a fault.
+    // agent on it is the normal case rather than a fault. With no desktop app to
+    // pair with, `send` opens nothing.
     if (type === 'si-bridge-url') {
       const { host, port, scheme } = msg as {
         host?: string;
@@ -208,24 +222,36 @@ export default defineBackground(() => {
         scheme?: string;
       };
       if (typeof host === 'string' && host) {
-        isBridgeEnabled()
-          .then((on) =>
-            on ? sendBrowserUrl(host, port ?? null, scheme === 'https' ? 'https' : 'http') : false,
-          )
-          .catch(() => false);
+        sendBrowserUrl(host, port ?? null, scheme === 'https' ? 'https' : 'http').catch(
+          () => false,
+        );
       }
       return false;
     }
     // We showed a warning for this copy, so the desktop should stay quiet about
     // it. Fire-and-forget: the paste has already been dealt with either way.
     if (type === 'si-bridge-handled') {
-      const { hash } = msg as { hash?: string };
-      if (typeof hash === 'string' && hash) {
-        isBridgeEnabled()
-          .then((on) => (on ? sendHandledHash(hash) : false))
-          .catch(() => false);
+      const { digest } = msg as { digest?: string };
+      if (typeof digest === 'string' && digest) {
+        sendHandled(digest).catch(() => false);
       }
       return false;
+    }
+    // A content script is about to warn about a paste and asks whether the
+    // person already restored that text with Undo in the desktop app.
+    if (type === 'si-bridge-allowed') {
+      const { digest } = msg as { digest?: string };
+      queryAllowed(typeof digest === 'string' ? digest : '')
+        .then(sendResponse)
+        .catch(() => sendResponse(false));
+      return true;
+    }
+    // The popup asks whether a desktop app is connected right now.
+    if (type === 'si-bridge-check') {
+      desktopConnected()
+        .then(sendResponse)
+        .catch(() => sendResponse(false));
+      return true;
     }
     // User accepted Terms & Privacy (welcome page or popup) → clear the nag badge.
     if (type === 'si-consent-accepted') {

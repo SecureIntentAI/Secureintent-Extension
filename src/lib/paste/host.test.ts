@@ -174,8 +174,9 @@ test('1,000 concurrent sessions complete real scans with at most four workers an
       postMessage(command: PasteCommand) {
         busy++;
         peak = Math.max(peak, busy);
-        queueMicrotask(() => {
-          const result = createPasteComputation()(command);
+        // Mirrors paste-worker.ts, which awaits the scan (its digest is WebCrypto).
+        queueMicrotask(async () => {
+          const result = await createPasteComputation()(command);
           busy--;
           worker.onmessage?.call(
             worker as unknown as Worker,

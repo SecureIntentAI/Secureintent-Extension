@@ -695,6 +695,59 @@ describe('createPasteGuard', () => {
     expect(mountOverlayMock).not.toHaveBeenCalled();
   });
 
+  test('text restored with Undo in the desktop app is pasted without a second warning', async () => {
+    const sent: Array<{ type?: string; digest?: string }> = [];
+    // Restored at the end: a desktop that always says "restored" would skip
+    // the warning in every later test.
+    const desktop = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation((async (m: {
+      type?: string;
+      digest?: string;
+    }) => {
+      sent.push(m);
+      return m.type === 'si-bridge-allowed' ? true : undefined;
+    }) as never);
+    const t = setup();
+    await t.start();
+    const e = t.makeEvent(SECRET);
+    await t.firePaste(e);
+    // The page never got the raw event, the desktop was asked by digest only,
+    // and no warning was shown.
+    expect(e.preventDefault).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('insertText', false, SECRET),
+    );
+    const question = sent.find((m) => m.type === 'si-bridge-allowed');
+    expect(question?.digest).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(sent)).not.toContain(SECRET);
+    expect(mountOverlayMock).not.toHaveBeenCalled();
+    expect(await getBlockedCount()).toBe(0);
+    // The desktop is told this paste was dealt with, as after any decision.
+    expect(sent.some((m) => m.type === 'si-bridge-handled')).toBe(true);
+    desktop.mockRestore();
+  });
+
+  test('an Undo in the desktop app does not override a team block policy', async () => {
+    const asked: unknown[] = [];
+    const desktop = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation((async (m: {
+      type?: string;
+    }) => {
+      if (m.type === 'si-bridge-allowed') asked.push(m);
+      return m.type === 'si-bridge-allowed' ? true : undefined;
+    }) as never);
+    await saveBundle({
+      ...DEFAULT_BUNDLE,
+      policy: { blockInsteadOfWarn: true, requireSessionLock: false, blockedSites: [] },
+    });
+    const t = setup();
+    await t.start();
+    await t.firePaste(t.makeEvent(SECRET));
+    await vi.waitFor(() => expect(mountOverlayMock).toHaveBeenCalledTimes(1));
+    expect(asked).toEqual([]);
+    expect(mountOverlayMock.mock.calls[0][1].blockRawPaste).toBe(true);
+    expect(document.execCommand).not.toHaveBeenCalled();
+    desktop.mockRestore();
+  });
+
   test('"paste" action inserts the original text', async () => {
     const t = setup();
     await t.start();

@@ -26,7 +26,8 @@ export interface ScanResult {
   sample?: Detection[];
   types: SecretType[];
   labels: string[];
-  handledHash: string;
+  /** SHA-256 of the pasted text, for the desktop bridge's keyed dedup MAC. */
+  handledDigest: string;
 }
 export interface PasteOperations {
   scan: {
