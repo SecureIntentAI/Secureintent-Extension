@@ -94,6 +94,20 @@ test('a popup waiting on a check cancelled by a session change gets the new resu
   expect((await entitlementItem.getValue())?.blob.plan).toBe('developer_pro');
 });
 
+test('a sign-in that changes the session twice still ends with the fresh plan, not an error', async () => {
+  vi.mocked(fetch)
+    .mockImplementationOnce(() => new Promise(() => {})) // cancelled by the first change
+    .mockImplementationOnce(() => new Promise(() => {})); // cancelled by the second change
+  const waiting = refreshEntitlementBg();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  invalidateEntitlementRefresh(); // e.g. __client_uat written
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2), { timeout: 2000 });
+  invalidateEntitlementRefresh(); // then __session written
+  const result = await waiting;
+  expect(result.status).toBe('updated');
+  expect(fetch).toHaveBeenCalledTimes(3);
+});
+
 test('a stuck Clerk token request times out and a retry can succeed', async () => {
   vi.useFakeTimers();
   tokenMock.mockImplementationOnce(() => new Promise(() => {}));

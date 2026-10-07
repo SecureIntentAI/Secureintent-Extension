@@ -11,9 +11,22 @@ type Tab = Browser.tabs.Tab;
  * the policy up from storage when they run, so they must not hold the receipt
  * at "pending" and make the console's rollout flap between check-ins.
  */
-/** Browsers never run extension scripts on their own add-on stores. */
+/**
+ * Browsers never run extension scripts on their own add-on stores, nor on
+ * Firefox's restricted Mozilla domains (extensions.webextensions.restrictedDomains).
+ */
 const NO_SCRIPT_PAGES =
-  /^https:\/\/(?:chromewebstore\.google\.com|chrome\.google\.com\/webstore|addons\.mozilla\.org|microsoftedge\.microsoft\.com\/addons)(?:\/|$)/;
+  /^https:\/\/(?:chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons|(?:addons|discovery\.addons|support|install)\.mozilla\.org|(?:accounts|api\.accounts|oauth\.accounts|profile\.accounts)\.firefox\.com|(?:accounts-static|addons|content)\.cdn\.mozilla\.net|sync\.services\.mozilla\.com)(?:\/|$)/;
+/** A PDF opens in the browser's own viewer, where content scripts do not run. */
+const PDF_VIEWER = /\.pdf$/i;
+
+const pathOf = (url: string) => {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '';
+  }
+};
 
 function probeable(tab: Tab): tab is Tab & { id: number } {
   const url = tab.url ?? '';
@@ -22,6 +35,7 @@ function probeable(tab: Tab): tab is Tab & { id: number } {
     tab.id !== undefined &&
     /^https?:/.test(url) &&
     !NO_SCRIPT_PAGES.test(url) &&
+    !PDF_VIEWER.test(pathOf(url)) &&
     !tab.discarded &&
     // Chrome freezes background tabs; a frozen page cannot answer until it thaws.
     !(tab as Tab & { frozen?: boolean }).frozen &&

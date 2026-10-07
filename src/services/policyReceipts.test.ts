@@ -43,6 +43,9 @@ test('sleeping and loading tabs are not expected to answer, so the receipt is co
     tab(6, { url: 'https://chromewebstore.google.com/detail/x' }),
     tab(7, { url: 'https://addons.mozilla.org/en-US/firefox/' }),
     tab(8, { frozen: true }),
+    tab(9, { url: 'https://support.mozilla.org/en-US/kb/' }),
+    tab(10, { url: 'https://accounts.firefox.com/settings' }),
+    tab(11, { url: 'https://example.com/report.PDF' }),
   ] as unknown as Tabs);
   answerProbes(7);
   const receipt = collectPolicyReceipts('org_acme', 7);

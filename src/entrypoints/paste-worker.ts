@@ -14,7 +14,10 @@ export default defineUnlistedScript(() => {
       const compute = createPasteComputation();
       if (data.operation !== 'scan') {
         if (!data.scan) throw new Error('Missing scan context');
-        compute({ id: data.id, operation: 'scan', input: data.scan });
+        // Rebuilds the text and findings synchronously; its digest is not needed here.
+        void Promise.resolve(compute({ id: data.id, operation: 'scan', input: data.scan })).catch(
+          () => {},
+        );
       }
       scope.postMessage({ id: data.id, ok: true, result: await compute(data) });
     } catch {
