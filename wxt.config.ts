@@ -68,8 +68,8 @@ export default defineConfig({
       },
       description:
         'Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.',
-      // activeTab: read the current tab's URL (on popup open) to show which site
-      // is being protected. No broad tabs permission needed.
+      // No activeTab: the host permissions below already let the popup read the
+      // current tab's URL to show which site is protected.
       // cookies: required by @clerk/chrome-extension to read/sync the Clerk session
       // from the Sync Host (secureintent.ai) and the Frontend API domain.
       // nativeMessaging: ask the SecureIntent desktop app for the bridge pairing
@@ -78,7 +78,6 @@ export default defineConfig({
       permissions: [
         'storage',
         'alarms',
-        'activeTab',
         'cookies',
         'nativeMessaging',
         ...(isFirefox ? [] : ['offscreen', 'scripting']),

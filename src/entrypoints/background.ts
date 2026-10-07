@@ -72,10 +72,10 @@ export default defineBackground(() => {
       void injectOpenTabs();
       // Pairing is automatic now; a token pasted into an older version is not
       // left sitting in local storage.
-      void forgetManualPairing();
+      void forgetManualPairing().catch(() => {});
     }
     // Look for the desktop app now rather than on the first paste.
-    void pairingToken({ fresh: true });
+    void pairingToken({ fresh: true }).catch(() => {});
     updateConsentBadge();
     // Nothing of ours runs at uninstall time, so the address the browser opens
     // then has to be registered now — and again at every startup, since a new
@@ -113,7 +113,7 @@ export default defineBackground(() => {
   // A new browser session starts with no cached pairing: ask the desktop app.
   // Not on every worker wake — that would start the native host each time.
   browser.runtime.onStartup.addListener(() => {
-    void pairingToken({ fresh: true });
+    void pairingToken({ fresh: true }).catch(() => {});
   });
 
   // Auto-sync entitlement on sign-in / sign-out. Clerk mirrors the web-app
@@ -157,7 +157,7 @@ export default defineBackground(() => {
       reportInstall(); // retry an install report that couldn't send (offline at install)
       void flushShadow();
       // Notice a desktop app installed (or removed) since the last look.
-      void pairingToken({ fresh: true });
+      void pairingToken({ fresh: true }).catch(() => {});
     }
   });
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {

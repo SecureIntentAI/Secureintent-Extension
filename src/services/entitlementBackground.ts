@@ -41,6 +41,7 @@ export async function getClerkToken(): Promise<string | null> {
 
 let pendingRefresh: { controller: AbortController; promise: Promise<RefreshResult> } | undefined;
 const SUPERSEDED = 'superseded';
+const SUPERSEDED_RETRY_MS = 700;
 
 /** A session change must not reuse, or be overwritten by, an older refresh. */
 export function invalidateEntitlementRefresh(): void {
@@ -54,7 +55,7 @@ export function invalidateEntitlementRefresh(): void {
  * A refresh cancelled by a session change answers with a fresh check for the
  * new session (once), so a waiting popup never reports that as a failure.
  */
-export function refreshEntitlementBg(retryIfSuperseded = true): Promise<RefreshResult> {
+export function refreshEntitlementBg(supersededRetries = 2): Promise<RefreshResult> {
   if (pendingRefresh) return pendingRefresh.promise;
   const controller = new AbortController();
   const promise = withDeadline(async (signal) => {
@@ -82,8 +83,12 @@ export function refreshEntitlementBg(retryIfSuperseded = true): Promise<RefreshR
     return result;
   }, controller)
     .catch((error): RefreshResult | Promise<RefreshResult> => {
-      if (retryIfSuperseded && controller.signal.reason === SUPERSEDED)
-        return refreshEntitlementBg(false);
+      // A sign-in changes the session more than once in quick succession, so
+      // wait out the burst (the background debounces it by 500 ms) first.
+      if (supersededRetries > 0 && controller.signal.reason === SUPERSEDED)
+        return new Promise<void>((resolve) => setTimeout(resolve, SUPERSEDED_RETRY_MS)).then(() =>
+          refreshEntitlementBg(supersededRetries - 1),
+        );
       return {
         status: 'error',
         error: error instanceof Error ? error.message : String(error),
