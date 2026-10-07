@@ -56,7 +56,7 @@ export function ConsentGate({ onAgree, onCancel, contentKind = 'paste' }: Consen
             type="button"
             className="si-x"
             aria-label={
-              isFile ? 'Dismiss — file upload is cancelled' : 'Dismiss — paste is discarded'
+              isFile ? 'Dismiss, file upload is cancelled' : 'Dismiss, paste is discarded'
             }
             onClick={onCancel}
           >
@@ -103,7 +103,7 @@ export function ConsentGate({ onAgree, onCancel, contentKind = 'paste' }: Consen
         <p className="si-consent-note">
           {isFile
             ? 'Closing this cancels the selected file; the page will not receive it.'
-            : "Closing this discards the paste you just made — nothing is inserted. Copy it again once you've agreed."}
+            : "Closing this discards the paste you just made. Nothing is inserted. Copy it again once you've agreed."}
         </p>
 
         <div className="si-actions">

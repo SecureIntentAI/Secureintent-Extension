@@ -38,7 +38,7 @@ function planText(ent: ActiveEntitlement): string {
 }
 
 /** Why the plan on screen might not be the one the user expects. */
-const REFRESH_UNAVAILABLE = "Couldn't check your plan just now — showing the last one we saw.";
+const REFRESH_UNAVAILABLE = "Couldn't check your plan just now. Showing the last one we saw.";
 const REFRESH_CLEARED =
   "We couldn't verify your Pro licence on this device, so it's been reset to Free. Sign in again on the account page, then retry.";
 
@@ -81,14 +81,61 @@ function openShadowDashboard() {
   browser.tabs.create({ url: SHADOW_DASHBOARD_URL }).catch(() => {});
 }
 
-/** Team console shortcut. Admins only — a member has nothing to manage there. */
-function TeamLink({ ent }: { ent: ActiveEntitlement }) {
-  if (!canManageTeam(ent)) return null;
+function TeamIcon() {
   return (
-    <button type="button" className="si-team-link" onClick={openTeamTab}>
-      Manage team
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+      <circle cx="9" cy="8.5" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M3.5 18.5a5.5 5.5 0 0 1 11 0"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <circle cx="16.5" cy="9.5" r="2.4" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M15.5 14.2a4.6 4.6 0 0 1 5 4.3"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Team console shortcut: a row of its own under the profile, naming the
+ * organisation and its seats. Admins only; a member has nothing to manage there.
+ */
+function TeamLink({ ent }: { ent: ActiveEntitlement }) {
+  if (!canManageTeam(ent) || !ent.org) return null;
+  const seats =
+    Number(ent.org.seats) > 0
+      ? ` · ${Number(ent.org.seats).toLocaleString()} ${Number(ent.org.seats) === 1 ? 'seat' : 'seats'}`
+      : '';
+  return (
+    <button type="button" className="si-team-row" onClick={openTeamTab}>
+      <span className="si-team-row-icon" aria-hidden="true">
+        <TeamIcon />
+      </span>
+      <span className="si-team-row-lines">
+        <span className="si-team-row-title">Manage team</span>
+        <span className="si-team-row-sub">
+          {ent.org.name ?? 'Your organisation'}
+          {seats}
+        </span>
+      </span>
       <ChevronIcon />
     </button>
+  );
+}
+
+function RadarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="12" cy="12" r="4" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 12l5.5-5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -96,8 +143,14 @@ function TeamLink({ ent }: { ent: ActiveEntitlement }) {
 function ShadowDashboardLink({ ent }: { ent: ActiveEntitlement }) {
   if (ent.plan !== 'business_pro' || !canManageTeam(ent)) return null;
   return (
-    <button type="button" className="si-team-link" onClick={openShadowDashboard}>
-      Shadow AI dashboard
+    <button type="button" className="si-team-row" onClick={openShadowDashboard}>
+      <span className="si-team-row-icon" aria-hidden="true">
+        <RadarIcon />
+      </span>
+      <span className="si-team-row-lines">
+        <span className="si-team-row-title">Shadow AI dashboard</span>
+        <span className="si-team-row-sub">AI tools your team uses</span>
+      </span>
       <ChevronIcon />
     </button>
   );

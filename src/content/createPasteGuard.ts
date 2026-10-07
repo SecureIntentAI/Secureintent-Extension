@@ -16,6 +16,7 @@ import {
   GHOST_MIN_CHARS,
   mergeCatalog,
   TOKEN_RE,
+  teamPatternsOnly,
 } from '@/lib/detection';
 import { getEntitlementSnapshot, hasFeatureCached, initEntitlementCache } from '@/lib/entitlement';
 import { entitlementItem } from '@/lib/entitlement/store';
@@ -45,11 +46,8 @@ import { findComposer } from './findComposer';
 import { readClipboardText } from './readClipboard';
 import type { SiteConfig } from './types';
 
-const ACTION_BY_OVERLAY: Record<'paste' | 'redact' | 'cancel', TelemetryAction> = {
-  paste: 'paste_anyway',
-  redact: 'paste_anonymously',
-  cancel: 'cancelled',
-};
+/** The telemetry API accepts at most this many findings per paste. */
+const MAX_TELEMETRY_FINDINGS = 100;
 const browserStore: KeyValueStore = {
   get: async (key) => (await storage.getItem<string>(`local:${key}`)) ?? undefined,
   set: (key, value) => storage.setItem(`local:${key}`, value),
@@ -74,6 +72,16 @@ interface PasteJob {
   shadowPasteId?: string;
   reportOutcome?: (action: DlpAction) => void;
 }
+
+/**
+ * Rich editors legitimately change whitespace: a pasted "\n" becomes a new
+ * paragraph (which Range.toString() reports as nothing) and spaces become
+ * non-breaking spaces. Confirm the inserted characters, in order, and ignore
+ * how the editor laid out the whitespace between them.
+ */
+const sameText = (actual: string, expected: string): boolean =>
+  actual.replace(/[\s\u00a0\u200b\ufeff]+/g, '') ===
+  expected.replace(/[\s\u00a0\u200b\ufeff]+/g, '');
 
 function editableText(el: HTMLElement): string {
   const range = document.createRange();
@@ -134,7 +142,17 @@ function insertText(
   if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
     const start = selection && 'start' in selection ? selection.start : el.selectionStart;
     const end = selection && 'end' in selection ? selection.end : el.selectionEnd;
-    if (start === null || end === null) throw new Error('The editor selection is unavailable');
+    if (start === null || end === null) {
+      // type=email/number expose no selection API. The browser still keeps the
+      // caret, so insert there and confirm the text landed. (These types also
+      // sanitize the value, e.g. drop line breaks, hence the loose comparison.)
+      const before = el.value;
+      applyInsertion(() => document.execCommand('insertText', false, text));
+      const compact = (v: string) => v.replace(/[\s\u00a0]+/g, '');
+      if (el.value === before || !compact(el.value).includes(compact(text)))
+        throw new Error('The editor did not accept the checked text');
+      return;
+    }
     if (start < 0 || end < start || end > el.value.length) {
       throw new Error('The saved paste position is no longer valid');
     }
@@ -183,7 +201,7 @@ function insertText(
       // Clipboard event support can vary; try the browser insertion path.
     }
     if (handled) {
-      if (editableText(el) !== expected) {
+      if (!sameText(editableText(el), expected)) {
         throw new Error('The editor did not accept the checked text');
       }
       return;
@@ -192,7 +210,7 @@ function insertText(
 
   const inserted = applyInsertion(() => document.execCommand('insertText', false, text));
   if (el.isContentEditable) {
-    if (editableText(el) !== expected) {
+    if (!sameText(editableText(el), expected)) {
       throw new Error('The editor did not accept the checked text');
     }
   } else if (!inserted) {
@@ -371,14 +389,12 @@ export async function createPasteGuard(
   };
   const status = (job: PasteJob, kind: PasteStatus) =>
     present(job, () => mountPasteStatus(ctx, kind, () => finish(job)));
-  const failed = async (job: PasteJob, error: unknown) => {
+  const failed = (job: PasteJob, error: unknown) => {
     if (!live(job)) return;
     siError(config.name, 'paste operation failed; insertion was not confirmed', error);
-    try {
-      await status(job, 'error');
-    } catch {
-      finish(job);
-    }
+    // Keep the failure available in the console for diagnosis without showing
+    // the alarming modal. Release the job so later pastes are not held up.
+    finish(job);
   };
   async function drainStartupQueue() {
     if (disposed || !processPaste || drainingStartupQueue || active) return;
@@ -437,8 +453,9 @@ export async function createPasteGuard(
       await failed(job, error);
     }
   };
-  const insert = async (job: PasteJob, text: string) => {
-    if (!live(job) || !job.input.isConnected) return;
+  /** Resolves true once the text is in the composer; false if the job or input went away. */
+  const insert = async (job: PasteJob, text: string): Promise<boolean> => {
+    if (!live(job) || !job.input.isConnected) return false;
     await insertText(
       job.input,
       text,
@@ -455,6 +472,7 @@ export async function createPasteGuard(
         }
       },
     );
+    return true;
   };
   ctx.addEventListener(window, 'keydown', (event) => {
     if ((event as KeyboardEvent).key === 'Escape' && active) finish(active);
@@ -522,17 +540,17 @@ export async function createPasteGuard(
     siError(config.name, 'policy unavailable; using bundled defaults', error);
     return DEFAULT_BUNDLE;
   });
-  let compiled = mergeCatalog(compilePatterns(bundle.patterns));
-  // Email/IP detection applies at every paste length. Standard tuning can drop
-  // entropy rules, while Ghost always excludes them to preserve log hashes/SHAs.
+  let remote = compilePatterns(bundle.patterns);
+  let compiled = mergeCatalog(remote);
+  // Email/IP detection applies at every paste length, unless the team runs only
+  // its own patterns. Standard tuning can drop entropy rules, while Ghost always
+  // excludes them to preserve log hashes/SHAs.
+  let extra = teamPatternsOnly(remote) ? [] : GHOST_EXTRA_PATTERNS;
   let patterns = [
     ...(bundle.aggressive === false ? compiled.filter((p) => p.validate !== 'entropy') : compiled),
-    ...GHOST_EXTRA_PATTERNS,
+    ...extra,
   ];
-  let ghostPatterns = [
-    ...compiled.filter((p) => p.validate !== 'entropy'),
-    ...GHOST_EXTRA_PATTERNS,
-  ];
+  let ghostPatterns = [...compiled.filter((p) => p.validate !== 'entropy'), ...extra];
   let ghostMin =
     typeof bundle.ghost?.minChars === 'number' ? bundle.ghost.minChars : GHOST_MIN_CHARS;
   let inputSelector =
@@ -567,14 +585,16 @@ export async function createPasteGuard(
     // Discard pending work before ending a job: ending it can drain the queue.
     cancelPending();
     bundle = next ?? DEFAULT_BUNDLE;
-    compiled = mergeCatalog(compilePatterns(bundle.patterns));
+    remote = compilePatterns(bundle.patterns);
+    compiled = mergeCatalog(remote);
+    extra = teamPatternsOnly(remote) ? [] : GHOST_EXTRA_PATTERNS;
     patterns = [
       ...(bundle.aggressive === false
         ? compiled.filter((p) => p.validate !== 'entropy')
         : compiled),
-      ...GHOST_EXTRA_PATTERNS,
+      ...extra,
     ];
-    ghostPatterns = [...compiled.filter((p) => p.validate !== 'entropy'), ...GHOST_EXTRA_PATTERNS];
+    ghostPatterns = [...compiled.filter((p) => p.validate !== 'entropy'), ...extra];
     ghostMin = typeof bundle.ghost?.minChars === 'number' ? bundle.ghost.minChars : GHOST_MIN_CHARS;
     inputSelector =
       bundle.sites[config.siteKey]?.inputSelector ??
@@ -737,6 +757,8 @@ export async function createPasteGuard(
             flags: regex.flags,
           })),
           summary: ghostMode,
+          // Only the paste guard fingerprints a summary scan's findings for telemetry.
+          sample: ghostMode,
         });
       } finally {
         clearTimeout(checkingTimer);
@@ -831,7 +853,9 @@ export async function createPasteGuard(
       if (scan.total === 0 && !destinationBlocked) {
         // Plain-text insertion only after a complete scan, preserving the
         // user's original selection even if focusing the site changes it.
-        await act(pending, () => insert(pending, text));
+        await act(pending, async () => {
+          await insert(pending, text);
+        });
         return;
       }
       // Show the actual secret warning for this paste. Extracted so the
@@ -853,13 +877,18 @@ export async function createPasteGuard(
         };
         notifyDetections(featureCtx);
 
-        // Telemetry is per-finding (one fingerprint each). Ghost pastes can hold
-        // hundreds of findings, so telemetry is skipped for them in this build.
+        // One fingerprint per finding, for at most the first 100 (the API's cap).
+        // Large (Ghost) pastes and pastes with more findings are reported too:
+        // the team Overview counts pastes, so a sample is enough.
+        const telemetrySample = (detections.length ? detections : (scan.sample ?? [])).slice(
+          0,
+          MAX_TELEMETRY_FINDINGS,
+        );
         const fingerprintsPromise =
-          ghostMode || !salt || scan.total > detections.length
+          !salt || telemetrySample.length === 0
             ? null
             : Promise.all(
-                detections.map(async (d) => {
+                telemetrySample.map(async (d) => {
                   const fingerprint = await computeFingerprint(d.match, salt);
                   siDebug(config.name, 'fingerprint', { label: d.label, fingerprint });
                   return { fingerprint, type: d.type, label: d.label };
@@ -928,12 +957,16 @@ export async function createPasteGuard(
                   return;
                 }
                 if (action === 'rehydrate') return; // only the rehydrate overlay emits this
+                // What actually happened, for team telemetry. Set only once an insert
+                // really landed; a refused action is reported as cancelled. A paste
+                // that fails part-way (worker, quota, insert error) sends nothing.
+                let outcome: TelemetryAction = 'cancelled';
                 // `allowRawPaste` is re-checked here, not just in the UI: the
                 // policy has to hold even if the overlay were driven some other
                 // way. Under a block the paste is simply dropped (= cancel).
                 if (action === 'paste') {
-                  if (allowRawPaste) {
-                    await insert(pending, text);
+                  if (allowRawPaste && (await insert(pending, text))) {
+                    outcome = 'paste_anyway';
                     pending.reportOutcome?.('warning_bypassed');
                   }
                 } else if (
@@ -946,8 +979,12 @@ export async function createPasteGuard(
                   await status(pending, 'checking');
                   if (!live(pending)) return;
                   const sanitized = await processor.request('sanitize', null);
-                  if (hasFeatureCached('ghost') && live(pending)) {
-                    await insert(pending, sanitized);
+                  if (
+                    hasFeatureCached('ghost') &&
+                    live(pending) &&
+                    (await insert(pending, sanitized))
+                  ) {
+                    outcome = 'sanitised';
                     pending.reportOutcome?.('sanitised');
                   }
                 } else if (action === 'redact' && proAction && !destinationBlocked) {
@@ -969,8 +1006,10 @@ export async function createPasteGuard(
                   // token→secret map so a later paste can rehydrate them.
                   await storeVaultEntries(entries);
                   if (!live(pending)) return;
-                  await insert(pending, masked);
-                  pending.reportOutcome?.('sanitised');
+                  if (await insert(pending, masked)) {
+                    outcome = 'paste_anonymously';
+                    pending.reportOutcome?.('sanitised');
+                  }
                 }
                 notifyAction({ ...featureCtx, action }); // pro: audit log / team report
                 // We showed a warning for this copy, so the desktop app — if the
@@ -981,12 +1020,11 @@ export async function createPasteGuard(
                 browser.runtime
                   .sendMessage({ type: 'si-bridge-handled', hash: scan.handledHash })
                   .catch(() => {});
-                if (!ghostMode && action !== 'sanitize' && fingerprintsPromise) {
+                if (fingerprintsPromise) {
                   // A refused "paste" inserted nothing, so it is reported as
-                  // cancelled — never as paste_anyway, which would tell the team's
-                  // dashboard a secret went through when it did not.
-                  const telemetryAction =
-                    action === 'paste' && !allowRawPaste ? 'cancelled' : ACTION_BY_OVERLAY[action];
+                  // cancelled, never as paste_anyway. Under a team block it is
+                  // `blocked`, matching the Shadow AI ledger.
+                  const telemetryAction: TelemetryAction = destinationBlocked ? 'blocked' : outcome;
                   fingerprintsPromise.then((dets) => {
                     if (dets.length === 0) return;
                     sendTelemetry(

@@ -21,9 +21,9 @@ in [`wxt.config.ts`](../wxt.config.ts).
 | Firefox runtime smoke test | Passed in system Firefox ESR with local integration fixtures; live provider checks pending |
 
 **Artifacts to upload** (in `dist/`):
-- `secureintent-extension-1.2.0-firefox.zip` — local candidate package; submit only after release approval
-- `secureintent-extension-1.2.0-sources.zip` — source for reviewers (see §6; required)
-- `secureintent-extension-1.2.0-SHA256SUMS.txt` — checksums for the Chrome, Firefox, and source ZIPs
+- `final2.firefox.zip` — release candidate package; submit only after release approval
+- `final2-sources.zip` — source for reviewers (see §6; required)
+- `final2-SHA256SUMS.txt` — checksums for the Chrome, Firefox, and source ZIPs
 
 Regenerate the package with: `pnpm zip:firefox`. Regenerate the source archive from the
 current release worktree while excluding `.env`, dependencies, generated bundles, and
@@ -83,7 +83,7 @@ Keep these files sequential: their temporary browser builds share WXT's generate
 type directory. The test builds do not replace the production packages.
 
 Build the production target with `pnpm build:firefox`. The requested package names
-are `dist/final1.firefox.zip` and `dist/final1.firefox/`. Load its manifest through
+are `dist/final2.firefox.zip` and `dist/final2.firefox/`. Load its manifest through
 `about:debugging` for a temporary installation. See [hardening.md](./hardening.md)
 for the current evidence and remaining live release checks.
 
@@ -102,8 +102,8 @@ for the current evidence and remaining live release checks.
 
 1. **Developer Hub → Submit a New Add-on.**
 2. Distribution: **On this site (listed)**.
-3. Upload `dist/secureintent-extension-1.2.0-firefox.zip` only after the release gates pass. Wait for the automated validation (0 errors expected).
-4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/secureintent-extension-1.2.0-sources.zip`. Paste the reviewer notes from §6.
+3. Upload `dist/final2.firefox.zip` only after the release gates pass. Wait for the automated validation (0 errors expected).
+4. **Source code**: when asked "Do you need to upload source?" → **Yes** (the code is bundled/minified). Upload `dist/final2-sources.zip`. Paste the reviewer notes from §6.
 5. Answer the **data collection** questions using §5.
 6. Fill the **listing** using §4.
 7. Submit for review.
@@ -219,8 +219,8 @@ WXT can submit straight to AMO with API keys:
 ```bash
 # store the AMO issuer/secret as env or in .env.submit (never commit)
 npx wxt submit \
-  --firefox-zip dist/secureintent-extension-1.2.0-firefox.zip \
-  --firefox-sources-zip dist/secureintent-extension-1.2.0-sources.zip
+  --firefox-zip dist/final2.firefox.zip \
+  --firefox-sources-zip dist/final2-sources.zip
 ```
 
 Requires `AMO_JWT_ISSUER` / `AMO_JWT_SECRET` (from §2). Same review applies.

@@ -40,16 +40,21 @@ export async function getClerkToken(): Promise<string | null> {
 }
 
 let pendingRefresh: { controller: AbortController; promise: Promise<RefreshResult> } | undefined;
+const SUPERSEDED = 'superseded';
 
 /** A session change must not reuse, or be overwritten by, an older refresh. */
 export function invalidateEntitlementRefresh(): void {
   const previous = pendingRefresh;
   pendingRefresh = undefined;
-  previous?.controller.abort();
+  previous?.controller.abort(SUPERSEDED);
 }
 
-/** Share concurrent popup/startup refreshes; release the request on failure/timeout. */
-export function refreshEntitlementBg(): Promise<RefreshResult> {
+/**
+ * Share concurrent popup/startup refreshes; release the request on failure/timeout.
+ * A refresh cancelled by a session change answers with a fresh check for the
+ * new session (once), so a waiting popup never reports that as a failure.
+ */
+export function refreshEntitlementBg(retryIfSuperseded = true): Promise<RefreshResult> {
   if (pendingRefresh) return pendingRefresh.promise;
   const controller = new AbortController();
   const promise = withDeadline(async (signal) => {
@@ -76,12 +81,14 @@ export function refreshEntitlementBg(): Promise<RefreshResult> {
     }
     return result;
   }, controller)
-    .catch(
-      (error): RefreshResult => ({
+    .catch((error): RefreshResult | Promise<RefreshResult> => {
+      if (retryIfSuperseded && controller.signal.reason === SUPERSEDED)
+        return refreshEntitlementBg(false);
+      return {
         status: 'error',
         error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+      };
+    })
     .then((result) => {
       siDebug('entitlement', 'bg refresh', { status: result.status, plan: result.plan ?? null });
       return result;
