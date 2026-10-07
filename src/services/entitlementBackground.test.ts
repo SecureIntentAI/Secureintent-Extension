@@ -83,6 +83,17 @@ test('a response from the previous session cannot restore Pro after sign-out', a
   expect(await entitlementItem.getValue()).toBeNull();
 });
 
+test('a popup waiting on a check cancelled by a session change gets the new result, not an error', async () => {
+  vi.mocked(fetch).mockImplementationOnce(() => new Promise(() => {})); // the old check never answers
+  const waiting = refreshEntitlementBg();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  invalidateEntitlementRefresh();
+  const result = await waiting;
+  expect(result.status).toBe('updated');
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect((await entitlementItem.getValue())?.blob.plan).toBe('developer_pro');
+});
+
 test('a stuck Clerk token request times out and a retry can succeed', async () => {
   vi.useFakeTimers();
   tokenMock.mockImplementationOnce(() => new Promise(() => {}));

@@ -1,7 +1,14 @@
 import type { Fingerprint } from '@/lib/fingerprint';
 import type { SecretType } from '../detection';
 
-export type TelemetryAction = 'paste_anonymously' | 'paste_anyway' | 'cancelled';
+// `sanitised`: a large (Ghost) paste had every finding replaced before inserting.
+// `blocked`: team policy refused the paste, whatever the person chose.
+export type TelemetryAction =
+  | 'paste_anonymously'
+  | 'paste_anyway'
+  | 'cancelled'
+  | 'sanitised'
+  | 'blocked';
 
 export interface TelemetryDetection {
   fingerprint: Fingerprint;

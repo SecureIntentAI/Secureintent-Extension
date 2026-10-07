@@ -196,6 +196,46 @@ test('instance cookies take precedence and unrelated cookie changes are ignored'
   change('app.example.test', '__session_otherInstance');
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(changed).not.toHaveBeenCalled();
+  put(app, `__session_${suffix}`, jwt('user_two', 'sess_two'));
   change('app.example.test', `__session_${suffix}`);
   await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+});
+
+/** Install the watcher and return a trigger for a cookie write on the app domain. */
+async function watch(changed: () => void) {
+  vi.spyOn(browser.cookies.onChanged, 'addListener').mockImplementation(() => {});
+  watchCookieSession(changed);
+  await new Promise((resolve) => setTimeout(resolve, 10)); // baseline identity read
+  const listener = vi.mocked(browser.cookies.onChanged.addListener).mock.calls.at(-1)![0];
+  return (name = '__session') =>
+    listener({ cookie: { domain: 'app.example.test', name } } as Parameters<typeof listener>[0]);
+}
+
+test('token rotation for the same session is not a session change (Firefox false "Couldn\'t check your plan")', async () => {
+  put(app, '__session', jwt('user_one', 'sess_one', 60));
+  const changed = vi.fn();
+  const write = await watch(changed);
+  for (const seconds of [61, 62, 63, 64, 65]) {
+    put(app, '__session', jwt('user_one', 'sess_one', seconds)); // Clerk rewrites the token
+    write();
+  }
+  write('__client');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(changed).not.toHaveBeenCalled();
+});
+
+test('signing out and signing in as someone else are session changes', async () => {
+  put(app, '__session', jwt('user_one', 'sess_one'));
+  const changed = vi.fn();
+  const write = await watch(changed);
+  put(app, '__client_uat', '0');
+  write('__client_uat');
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  cookies.delete(`${app}/__client_uat`);
+  put(app, '__session', jwt('user_two', 'sess_two'));
+  write();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(2));
+  put(app, '__session', jwt('user_two', 'sess_three')); // new session, same account
+  write();
+  await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(3));
 });

@@ -182,12 +182,21 @@ function* scanSecrets(
 }
 
 /**
+ * A team chose "Use only these patterns": the Worker then serves nothing but the
+ * team's own rules. Built-in detection, including the supplemental email/IP
+ * checks the guards append, stays off for that team, as the console promises.
+ */
+export function teamPatternsOnly(remote: Pattern[]): boolean {
+  return remote.length > 0 && remote.every((pattern) => pattern.origin === 'team');
+}
+
+/**
  * Baked-in detectors always run. A signed bundle can add rules (team patterns
  * and newly shipped names) but cannot drop a key format this build already
  * knows. A bundle that is only team rules replaces the catalogue on purpose.
  */
 export function mergeCatalog(remote: Pattern[]): Pattern[] {
-  if (remote.length > 0 && remote.every((pattern) => pattern.origin === 'team')) return remote;
+  if (teamPatternsOnly(remote)) return remote;
   const known = new Set(PATTERNS.map((pattern) => pattern.label));
   const extra = remote.filter((pattern) => pattern.origin === 'team' || !known.has(pattern.label));
   return [...PATTERNS, ...extra];

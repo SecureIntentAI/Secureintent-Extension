@@ -311,7 +311,7 @@ function Welcome() {
             <HeroShield />
           </div>
           <h1 className="w-title">You're protected</h1>
-          <p className="w-sub">Paste as usual — we step in only when a secret is detected.</p>
+          <p className="w-sub">Paste as usual. We step in only when a secret is detected.</p>
           <Steps />
           <button type="button" className="w-cta w-cta--ghost" onClick={() => window.close()}>
             Close tab

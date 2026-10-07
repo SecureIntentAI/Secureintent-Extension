@@ -88,24 +88,46 @@ export function invalidateCookieSession(): void {
   old?.controller.abort();
 }
 
-/** Install only in the Firefox background; web sign-out/account switches sync live. */
+/** Who is signed in, ignoring the token itself: Clerk rotates that every minute. */
+async function identity(): Promise<string> {
+  const { session, key } = await snapshot();
+  if (key === 'signed-out') return 'signed-out';
+  return session ? `${session.sub}:${session.sid}` : 'none';
+}
+
+/**
+ * Install only in the Firefox background; web sign-out/account switches sync live.
+ * Clerk's page script rewrites the session cookie every few seconds while a
+ * secureintent.ai tab is open. Only a change of account, session or sign-in
+ * state counts: reacting to every rotation cancelled plan checks mid-flight
+ * and showed "Couldn't check your plan" for a healthy session.
+ */
 export function watchCookieSession(onChange: () => void): void {
   const hosts = [WEB_APP_URL, CLERK_SYNC_HOST].map((url) => new URL(url).hostname);
+  let known: Promise<string> = identity().catch(() => 'unknown');
   browser.cookies.onChanged.addListener((change) => {
     const domain = change.cookie.domain.replace(/^\./, '');
     if (!hosts.some((host) => host === domain || host.endsWith(`.${domain}`))) return;
-    void cookieSuffix()
-      .then((instance) => {
+    // Serialised, so a burst of cookie writes is compared in order.
+    known = known.then(async (previous) => {
+      try {
+        const instance = await cookieSuffix();
         if (
           !['__session', '__client', '__client_uat'].some(
             (name) => change.cookie.name === name || change.cookie.name === `${name}_${instance}`,
           )
         )
-          return;
-        invalidateCookieSession();
-        onChange();
-      })
-      .catch(() => {});
+          return previous;
+        const current = await identity();
+        if (current !== previous) {
+          invalidateCookieSession();
+          onChange();
+        }
+        return current;
+      } catch {
+        return previous;
+      }
+    });
   });
 }
 

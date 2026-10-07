@@ -22,13 +22,16 @@ export interface ScanResult {
   locations: SecretLocation[];
   total: number;
   summary?: GhostSummary;
+  /** Summary scans only: the first findings, for telemetry fingerprints. */
+  sample?: Detection[];
   types: SecretType[];
   labels: string[];
   handledHash: string;
 }
 export interface PasteOperations {
   scan: {
-    input: { text: string; patterns: WirePattern[]; summary: boolean };
+    /** `sample`: also return the first findings of a summary scan, for local fingerprinting. */
+    input: { text: string; patterns: WirePattern[]; summary: boolean; sample?: boolean };
     output: ScanResult;
   };
   sanitize: { input: null; output: string };
