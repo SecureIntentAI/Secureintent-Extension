@@ -45,6 +45,7 @@ import { buildEvent, sendTelemetry } from '@/services/telemetryService';
 import { enabledItem, isEnabled, recordBlocked } from '@/settings';
 import { isDraftEditor, pasteIntoDraft } from './draftEditorPaste';
 import { findComposer } from './findComposer';
+import { frameHostname, isTopFrame, keepListening, whenFrameUsed } from './frame';
 import { readClipboardText } from './readClipboard';
 import type { SiteConfig } from './types';
 
@@ -352,7 +353,7 @@ export async function createPasteGuard(
     // active. Email addresses and recovery codes are expected authentication
     // input here; intercepting them can prevent the user from signing in to the
     // product that owns the guard.
-    if (disposed || isSecureIntentOwnPage(location.hostname, location.pathname)) return;
+    if (disposed || isSecureIntentOwnPage(frameHostname(), location.pathname)) return;
     if (processPaste) {
       if (isFallback && dedicatedActive()) return;
       return processPaste(event);
@@ -360,40 +361,40 @@ export async function createPasteGuard(
     const captured = captureEarly(event, text);
     if (captured) enqueue(captured);
   };
-  ctx.addEventListener(
-    window,
-    'paste',
-    (event) => {
-      const e = event as ClipboardEvent;
-      if (!e.isTrusted || (isFallback && dedicatedActive())) return;
-      const text = readClipboardText(e.clipboardData);
-      if (text) return routePaste(event, text);
-    },
-    { capture: true },
-  );
-  ctx.addEventListener(
-    window,
-    'beforeinput',
-    (event) => {
-      const e = event as InputEvent;
-      if (!e.isTrusted || e.inputType !== 'insertFromPaste' || e.defaultPrevented) return;
-      const text = e.data || readClipboardText(e.dataTransfer);
-      if (!text) return;
-      const shim = {
-        isTrusted: true,
-        clipboardData: { getData: () => text },
-        composedPath: () => e.composedPath(),
-        preventDefault: () => e.preventDefault(),
-        stopImmediatePropagation: () => e.stopImmediatePropagation(),
-      } as unknown as ClipboardEvent;
-      routePaste(shim, text);
-    },
-    { capture: true },
-  );
+  const onPasteEvent = (event: Event) => {
+    const e = event as ClipboardEvent;
+    if (!e.isTrusted || (isFallback && dedicatedActive())) return;
+    const text = readClipboardText(e.clipboardData);
+    if (text) return routePaste(event, text);
+  };
+  const onBeforeInput = (event: Event) => {
+    const e = event as InputEvent;
+    if (!e.isTrusted || e.inputType !== 'insertFromPaste' || e.defaultPrevented) return;
+    const text = e.data || readClipboardText(e.dataTransfer);
+    if (!text) return;
+    const shim = {
+      isTrusted: true,
+      clipboardData: { getData: () => text },
+      composedPath: () => e.composedPath(),
+      preventDefault: () => e.preventDefault(),
+      stopImmediatePropagation: () => e.stopImmediatePropagation(),
+    } as unknown as ClipboardEvent;
+    routePaste(shim, text);
+  };
+  keepListening(ctx, () => {
+    ctx.addEventListener(window, 'paste', onPasteEvent, { capture: true });
+    ctx.addEventListener(window, 'beforeinput', onBeforeInput, { capture: true });
+  });
 
   // The catch-all guard may be starting in parallel on this same page. Claim
   // the site before yielding so it will not intercept and queue the same paste.
   if (!isFallback) markDedicated();
+
+  // An embedded frame keeps the listeners above from the start but loads its
+  // settings and policy only once it is used. A paste that comes first waits
+  // in the startup queue and is checked when loading finishes.
+  if (!isTopFrame()) await whenFrameUsed(ctx);
+  if (ctx.isInvalid) return;
 
   const salt: Salt | undefined = await getOrCreateSalt(browserStore).catch((error) => {
     siError(config.name, 'fingerprint salt unavailable; telemetry suppressed', error);
@@ -517,20 +518,24 @@ export async function createPasteGuard(
     );
     return true;
   };
-  ctx.addEventListener(window, 'keydown', (event) => {
-    if ((event as KeyboardEvent).key === 'Escape' && active) finish(active);
-  });
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape' && active) finish(active);
+  };
   const cancelPending = () => {
     clearQueue();
     if (active) finish(active);
   };
-  ctx.addEventListener(window, 'pagehide', cancelPending);
-  ctx.addEventListener(window, 'popstate', cancelPending);
-  ctx.addEventListener(window, 'hashchange', cancelPending);
-  ctx.addEventListener(document, 'input', (event) => {
-    if (active && !active.inserting && (event as Event).composedPath().includes(active.input)) {
+  const onInput = (event: Event) => {
+    if (active && !active.inserting && event.composedPath().includes(active.input)) {
       cancelPending(); // saved selections are stale after the user edits
     }
+  };
+  keepListening(ctx, () => {
+    ctx.addEventListener(window, 'keydown', onKeyDown);
+    ctx.addEventListener(window, 'pagehide', cancelPending);
+    ctx.addEventListener(window, 'popstate', cancelPending);
+    ctx.addEventListener(window, 'hashchange', cancelPending);
+    ctx.addEventListener(document, 'input', onInput);
   });
   ctx.onInvalidated?.(() => {
     disposed = true;
@@ -608,7 +613,7 @@ export async function createPasteGuard(
   // A blocked destination admits nothing at all — not the raw text, not an
   // anonymised or sanitized version of it. The rule is about the site, not the
   // secret, so every insert path is closed here.
-  let policyBlockedHost = isBlockedHost(location.hostname, policy.blockedSites);
+  let policyBlockedHost = isBlockedHost(frameHostname(), policy.blockedSites);
   let aiPage =
     window.top === window ? recognizeAiPage(location.hostname, location.pathname) : undefined;
   let demoRules = SHADOW_DEMO ? await demoPolicyItem.getValue().catch(() => []) : [];
@@ -643,7 +648,7 @@ export async function createPasteGuard(
       bundle.sites[config.siteKey]?.inputSelector ??
       DEFAULT_BUNDLE.sites[config.siteKey]?.inputSelector;
     policy = getPolicy(bundle);
-    policyBlockedHost = isBlockedHost(location.hostname, policy.blockedSites);
+    policyBlockedHost = isBlockedHost(frameHostname(), policy.blockedSites);
     aiMode = currentAiMode();
     aiBlocked = aiMode === 'block_all';
     destinationBlocked = policyBlockedHost || aiBlocked;
@@ -1108,7 +1113,7 @@ export async function createPasteGuard(
             // Team policy: a blocked destination gets the notice view (no paste
             // route at all); blockInsteadOfWarn just drops "Paste anyway".
             policyBlock: destinationBlocked
-              ? { host: location.hostname, sensitiveOnly: sensitivePasteBlocked }
+              ? { host: frameHostname(), sensitiveOnly: sensitivePasteBlocked }
               : undefined,
             blockRawPaste: policy.blockInsteadOfWarn,
             onAction,
@@ -1174,8 +1179,10 @@ export async function createPasteGuard(
         .catch(() => {});
       return false;
     }
+    // The popup asks about the page itself; only the top frame answers.
     if (
       (message as { type?: string })?.type !== 'si-protection-status' ||
+      !isTopFrame() ||
       (isFallback && dedicatedActive())
     )
       return false;

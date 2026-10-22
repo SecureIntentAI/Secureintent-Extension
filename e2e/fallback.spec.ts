@@ -99,3 +99,54 @@ test('fallback ignores non-secrets (no false positives)', async ({ context }) =>
     });
   }
 });
+
+// Editors embedded in frames: a cross-origin frame, a srcdoc frame, and an
+// about:blank frame the page fills in by script. Each frame guards its own
+// field and shows its own warning; the parent page shows none.
+const FRAME_SITE = 'https://frames.example/';
+const FRAMED_EDITOR = 'https://editor.example/embed';
+const FRAME_PAGE = `<!doctype html><meta charset="utf-8"><body>
+  <iframe id="cross" src="${FRAMED_EDITOR}" style="width:600px;height:400px"></iframe>
+  <iframe id="srcdoc" srcdoc="<textarea id='ta'></textarea>" style="width:600px;height:400px"></iframe>
+  <iframe id="blank" style="width:600px;height:400px"></iframe>
+  <script>
+    const doc = document.getElementById('blank').contentDocument;
+    doc.open();
+    doc.write('<!doctype html><body><textarea id="ta"></textarea></body>');
+    doc.close();
+  </script>
+</body>`;
+
+test('fallback guards editors inside frames, once per paste', async ({ context }) => {
+  const page = await context.newPage();
+  await page.route(FRAME_SITE, (route) =>
+    route.fulfill({ contentType: 'text/html', body: FRAME_PAGE }),
+  );
+  await page.route(FRAMED_EDITOR, (route) =>
+    route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><meta charset="utf-8"><body><textarea id="ta"></textarea></body>',
+    }),
+  );
+
+  for (const frame of ['#cross', '#srcdoc', '#blank']) {
+    await test.step(`secret paste in ${frame} is warned about inside that frame`, async () => {
+      await page.goto(FRAME_SITE, { waitUntil: 'load' });
+      const inner = page.frameLocator(frame);
+      await inner.locator('#ta').click();
+      await paste(page, `here ${SECRET} end`);
+      await expect(inner.locator('secureintent-overlay')).toHaveCount(1, { timeout: 5_000 });
+      await expect(page.locator('secureintent-overlay')).toHaveCount(0);
+      await expect(inner.locator('#ta')).toHaveValue('');
+    });
+  }
+
+  await test.step('a benign paste in a frame passes through unchanged', async () => {
+    await page.goto(FRAME_SITE, { waitUntil: 'load' });
+    const inner = page.frameLocator('#cross');
+    await inner.locator('#ta').click();
+    await paste(page, 'just a normal message');
+    await expect(inner.locator('#ta')).toHaveValue('just a normal message', { timeout: 5_000 });
+    await expect(inner.locator('secureintent-overlay')).toHaveCount(0);
+  });
+});

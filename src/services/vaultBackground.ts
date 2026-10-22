@@ -60,11 +60,15 @@ export function installVaultBackground() {
     .catch(() => {});
   browser.runtime.onMessage.addListener((message, sender, respond) => {
     if (message?.type !== 'si-vault-put' && message?.type !== 'si-vault-read') return false;
-    if (sender.id !== browser.runtime.id || sender.tab?.id == null || !sender.url) {
+    // An about:blank or srcdoc frame reports that as its URL; its origin
+    // (where the browser provides it) is the site the frame belongs to.
+    const origin = (sender as { origin?: string }).origin;
+    const source = origin && origin !== 'null' ? origin : sender.url;
+    if (sender.id !== browser.runtime.id || sender.tab?.id == null || !source) {
       respond({ ok: false });
       return false;
     }
-    void handleVaultMessage(message, sender.url).then(respond, () => respond({ ok: false }));
+    void handleVaultMessage(message, source).then(respond, () => respond({ ok: false }));
     return true;
   });
   browser.alarms.create('si-vault-expiry', { periodInMinutes: 1 });
