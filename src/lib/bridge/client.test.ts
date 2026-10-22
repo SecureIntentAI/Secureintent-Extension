@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { bridgeProof } from './auth';
-import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from './client';
+import {
+  desktopConnected,
+  mayReportBrowserUrl,
+  queryAllowed,
+  sendBrowserUrl,
+  sendHandled,
+} from './client';
 import { allowedMac, contentDigest, dedupMac } from './hash';
 import { NATIVE_HOST } from './pairing';
 
@@ -183,6 +189,19 @@ describe('pairing', () => {
     behaviour = { 8140: 'agent' };
     expect(await sendBrowserUrl('localhost', 3000)).toBe(true);
     expect(sent.at(-1)?.port).toBe(8140);
+  });
+});
+
+describe('mayReportBrowserUrl', () => {
+  test('a regular tab top frame is reported', () => {
+    expect(mayReportBrowserUrl({ tab: { incognito: false }, frameId: 0 })).toBe(true);
+  });
+
+  test('private tabs, sub-frames and non-tab senders are not', () => {
+    expect(mayReportBrowserUrl({ tab: { incognito: true }, frameId: 0 })).toBe(false);
+    expect(mayReportBrowserUrl({ tab: {}, frameId: 0 })).toBe(false);
+    expect(mayReportBrowserUrl({ tab: { incognito: false }, frameId: 3 })).toBe(false);
+    expect(mayReportBrowserUrl({ frameId: 0 })).toBe(false);
   });
 });
 

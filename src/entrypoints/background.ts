@@ -1,6 +1,12 @@
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
-import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from '@/lib/bridge/client';
+import {
+  desktopConnected,
+  mayReportBrowserUrl,
+  queryAllowed,
+  sendBrowserUrl,
+  sendHandled,
+} from '@/lib/bridge/client';
 import { pairingToken } from '@/lib/bridge/pairing';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL, IS_FIREFOX } from '@/lib/clerkConfig';
@@ -211,11 +217,13 @@ export default defineBackground(() => {
       return false;
     }
     // A content script says where its focused tab is. Pass it to the desktop
-    // agent so it can tell a local dev server from a real destination. Nothing
+    // agent so it can tell a local dev server from a real destination. Private
+    // windows are never reported. Nothing
     // waits on the answer: the bridge is an optimisation, and a machine with no
     // agent on it is the normal case rather than a fault. With no desktop app to
     // pair with, `send` opens nothing.
     if (type === 'si-bridge-url') {
+      if (!mayReportBrowserUrl(sender)) return false;
       const { host, port, scheme } = msg as {
         host?: string;
         port?: number | null;
