@@ -1,9 +1,8 @@
-import { browser, type ContentScriptContext, storage } from '#imports';
+import { browser, type ContentScriptContext } from '#imports';
 import { configItem } from '@/lib/config';
 import { siDebug } from '@/lib/debug';
 import { entitlementItem, hasFeature } from '@/lib/entitlement';
-import { getOrCreateSalt, type KeyValueStore } from '@/lib/fingerprint';
-import { verifyPin } from '@/lib/lock';
+import { requestUnlock } from '@/lib/lock/client';
 import { type LockWarningHandle, mountLockWarning } from '@/overlay/mountLockWarning';
 import { mountSessionLock, type SessionLockHandle } from '@/overlay/mountSessionLock';
 import {
@@ -14,10 +13,6 @@ import {
   sessionLockTimeoutItem,
 } from '@/settings';
 
-const browserStore: KeyValueStore = {
-  get: async (key) => (await storage.getItem<string>(`local:${key}`)) ?? undefined,
-  set: (key, value) => storage.setItem(`local:${key}`, value),
-};
 const LOCKED_FLAG = 'si_session_locked';
 const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'] as const;
 
@@ -37,9 +32,7 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
   let warnTimer: ReturnType<typeof setTimeout> | undefined;
   let lockTimer: ReturnType<typeof setTimeout> | undefined;
   let lastActivity = Date.now();
-  let attempts = 0;
   let retryAfter = 0;
-  const salt = await getOrCreateSalt(browserStore);
   const clearTimers = () => {
     clearTimeout(warnTimer);
     clearTimeout(lockTimer);
@@ -84,16 +77,12 @@ export async function createSessionLock(ctx: ContentScriptContext): Promise<void
       },
       onUnlock: async (pin) => {
         if (disposed || version !== revision || !pinHash || Date.now() < retryAfter) return false;
-        const valid = await verifyPin(pin, salt, pinHash);
+        // The background checks the PIN and keeps the attempt count, so a
+        // reload or another tab continues the same count and wait.
+        const result = await requestUnlock(pin);
         if (disposed || version !== revision) return false;
-        if (!valid) {
-          if (++attempts >= 5) {
-            retryAfter = Date.now() + 30_000;
-            attempts = 0;
-          }
-          return false;
-        }
-        attempts = 0;
+        retryAfter = result.retryAfter;
+        if (!result.ok) return false;
         locked = false;
         setFlag(false);
         handle?.remove();

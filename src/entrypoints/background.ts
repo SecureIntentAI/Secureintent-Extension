@@ -12,6 +12,7 @@ import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL, IS_FIREFOX } from '@/lib/clerkConfig';
 import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 import { getActiveEntitlement } from '@/lib/entitlement';
+import { LOCK_UNLOCK_MESSAGE } from '@/lib/lock/attempts';
 import { PASTE_READY } from '@/lib/paste/protocol';
 import { offlineConsume } from '@/lib/quota/offline';
 import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
@@ -35,6 +36,7 @@ import {
   SHADOW_POLICY_SYNC_ALARM,
   SYNC_ALARM,
 } from '@/services/scheduler';
+import { installSessionLockBackground } from '@/services/sessionLockBackground';
 import { flushShadow, installShadowBackground, recordShadow } from '@/services/shadowBackground';
 import { installShadowDemo, recordDemoShadow } from '@/services/shadowDemoBackground';
 import {
@@ -61,6 +63,7 @@ async function updateConsentBadge() {
 export default defineBackground(() => {
   installPasteWorkerBackground();
   installVaultBackground();
+  installSessionLockBackground();
   if (SHADOW_DEMO) installShadowDemo();
   else installShadowBackground();
   // First install → open the welcome/consent page. Any startup → refresh the
@@ -169,7 +172,12 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
     if (type === 'si-policy-receipt') return false;
-    if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo')
+    if (
+      type === 'si-vault-put' ||
+      type === 'si-vault-read' ||
+      type === 'si-shadow-demo' ||
+      type === LOCK_UNLOCK_MESSAGE
+    )
       return false;
     if (type === 'si-telemetry' && sender.tab && !sender.tab.incognito) {
       void sendAuthenticatedTelemetry(msg, sender.url)

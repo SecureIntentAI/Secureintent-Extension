@@ -4,7 +4,8 @@ import { PinBoxes } from '@/components/PinBoxes';
 import { ACCOUNT_URL } from '@/lib/clerkConfig';
 import { hasFeature } from '@/lib/entitlement';
 import { getOrCreateSalt, type KeyValueStore } from '@/lib/fingerprint';
-import { hashPin, verifyPin } from '@/lib/lock';
+import { hashPin } from '@/lib/lock';
+import { requestUnlock } from '@/lib/lock/client';
 import {
   clearSessionLockPin,
   isSessionLockEnforced,
@@ -128,10 +129,11 @@ export function SessionLockSettings() {
 
   // Verify the entered PIN, then run the pending protected action.
   const confirmGate = async (entered: string) => {
-    const hash = await sessionLockPinHashItem.getValue();
-    const salt = await getOrCreateSalt(store);
-    if (!hash || !(await verifyPin(entered, salt, hash))) {
-      setError('Incorrect PIN');
+    // Checked by the background, which shares one attempt count and wait with
+    // the lock screen on every tab.
+    const { ok } = await requestUnlock(entered);
+    if (!ok) {
+      setError('Incorrect PIN or too many attempts');
       setGatePin('');
       setGateAttempt((n) => n + 1); // reset + refocus the boxes
       return;

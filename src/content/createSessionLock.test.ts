@@ -12,6 +12,11 @@ vi.mock('@/overlay/mountSessionLock', () => ({ mountSessionLock: mount }));
 vi.mock('@/overlay/mountLockWarning', () => ({
   mountLockWarning: vi.fn(async () => ({ remove: vi.fn() })),
 }));
+// The background owns the PIN check; route the message straight to it.
+vi.mock('@/lib/lock/client', async () => {
+  const { tryUnlock } = await import('@/services/sessionLockBackground');
+  return { requestUnlock: (pin: string) => tryUnlock(pin) };
+});
 vi.mock('@/lib/entitlement', async (original) => ({
   ...(await original<object>()),
   hasFeature: vi.fn(async () => false),
@@ -62,6 +67,34 @@ test('setting the required PIN changes the setup gate to an unlock gate live', a
   expect(await unlock('1234')).toBe(false);
   now += 30_001;
   expect(await unlock('1234')).toBe(true);
+});
+
+test('the attempt count and wait carry over to a reloaded page', async () => {
+  await sessionLockPinHashItem.setValue(await hashPin('1234', 'test-salt' as Salt));
+  await enforce();
+  let now = Date.now();
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  await start();
+  await vi.waitFor(() => expect(mount).toHaveBeenCalled());
+  const first = mount.mock.calls.at(-1)![1].onUnlock;
+  for (let i = 0; i < 4; i++) expect(await first('0000')).toBe(false);
+
+  // Reload: a new lock instance on the same console.
+  for (const stop of stops.splice(0)) stop();
+  sessionStorage.clear();
+  mount.mockClear();
+  await start();
+  await vi.waitFor(() => expect(mount).toHaveBeenCalled());
+  const second = mount.mock.calls.at(-1)![1].onUnlock;
+  expect(await second('0000')).toBe(false); // fifth miss: 30 s wait
+  expect(await second('1234')).toBe(false);
+  now += 30_001;
+  expect(await second('0000')).toBe(false); // sixth miss: the wait doubles
+  now += 30_001;
+  expect(await second('1234')).toBe(false);
+  now += 30_000;
+  expect(await second('1234')).toBe(true);
 });
 
 const renewEntitlement = () =>
