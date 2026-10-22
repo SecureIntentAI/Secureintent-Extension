@@ -1,5 +1,6 @@
 import { browser, type ContentScriptContext, storage } from '#imports';
 import { abortable, withDeadline } from '@/lib/async';
+import { WEB_APP_URL } from '@/lib/clerkConfig';
 import {
   aiPasteMode,
   DEFAULT_BUNDLE,
@@ -252,16 +253,34 @@ function claimShadowVisit(): boolean {
   return true;
 }
 
+const isLocalHost = (url: string): boolean => {
+  try {
+    const { hostname } = new URL(url);
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+};
+/** Development builds, or a build whose web app is served from this machine. */
+const LOCAL_OWN_PAGES: boolean = import.meta.env.DEV || isLocalHost(WEB_APP_URL);
+
 /**
  * SecureIntent's own pages are never guarded: whatever is pasted there stays
  * with SecureIntent (an admin pasting a member's email into Users → Invite is
- * not a leak, and must not show a warning or count as a detection). On a local
- * pilot (localhost) only our own pages are skipped, so a developer's local app
- * stays protected.
+ * not a leak, and must not show a warning or count as a detection).
+ *
+ * A development build, or one pointed at a locally served site, also skips our
+ * own pages on localhost, and only those, so a developer's local app stays
+ * protected. Release builds have no localhost exemption at all.
  */
-export function isSecureIntentOwnPage(hostname: string, pathname: string): boolean {
+export function isSecureIntentOwnPage(
+  hostname: string,
+  pathname: string,
+  localOwnPages = LOCAL_OWN_PAGES,
+): boolean {
   const host = hostname.toLowerCase();
   if (host === 'secureintent.ai' || host.endsWith('.secureintent.ai')) return true;
+  if (!localOwnPages) return false;
   if (host !== '127.0.0.1' && host !== 'localhost') return false;
   return [
     '/account.html',
