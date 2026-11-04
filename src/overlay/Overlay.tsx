@@ -6,6 +6,7 @@ import {
   locateInText,
   type SecretLocation,
 } from '@/lib/detection';
+import { OFFLINE_LIMIT } from '@/lib/quota/offline';
 
 export type OverlayAction = 'paste' | 'redact' | 'cancel' | 'sanitize' | 'upgrade' | 'rehydrate';
 
@@ -44,6 +45,11 @@ export interface OverlayProps {
    */
   quotaExhausted?: { limit: number; resetsOn: string };
   /**
+   * Signed out after launch: Anonymise needs an account. The locked button
+   * says "Sign in" instead of "Pro", and opens the same account page.
+   */
+  signInRequired?: boolean;
+  /**
    * Team policy `blockedSites`: this destination is off-limits, so the dialog is
    * a notice with no paste actions at all.
    */
@@ -66,6 +72,7 @@ export function Overlay({
   rehydrate,
   pro = false, // fail-closed: a caller that omits `pro` gets the free (upgrade) UI
   quotaExhausted,
+  signInRequired = false,
   policyBlock,
   blockRawPaste = false,
   onAction,
@@ -191,6 +198,12 @@ export function Overlay({
           </p>
         )}
 
+        {!pro && signInRequired && (
+          <p className="si-quota-note">
+            Sign in to use Anonymise &amp; Paste. A free account includes {OFFLINE_LIMIT} a month.
+          </p>
+        )}
+
         {!pro && quotaExhausted && (
           <p className="si-quota-note">
             You've used all {quotaExhausted.limit} free Anonymise &amp; Paste this month. Your
@@ -221,12 +234,18 @@ export function Overlay({
               className="si-btn si-btn-locked"
               onClick={() => onAction('upgrade')}
               title={
-                quotaExhausted
-                  ? `Your free allowance comes back on ${quotaExhausted.resetsOn} (UTC)`
-                  : 'Upgrade to anonymize secrets before pasting'
+                signInRequired
+                  ? 'Sign in to anonymize secrets before pasting'
+                  : quotaExhausted
+                    ? `Your free allowance comes back on ${quotaExhausted.resetsOn} (UTC)`
+                    : 'Upgrade to anonymize secrets before pasting'
               }
             >
-              {quotaExhausted ? 'Upgrade for unlimited' : 'Paste anonymously · Pro'}
+              {signInRequired
+                ? 'Sign in to paste anonymously'
+                : quotaExhausted
+                  ? 'Upgrade for unlimited'
+                  : 'Paste anonymously · Pro'}
             </button>
           )}
         </div>

@@ -246,6 +246,24 @@ describe('Overlay', () => {
     expect(onAction).toHaveBeenCalledWith('upgrade');
   });
 
+  test('signed out after launch: asks for sign-in and routes to the account page', () => {
+    const onAction = vi.fn();
+    render(
+      <Overlay
+        site="ChatGPT"
+        text={text}
+        detections={detections}
+        pro={false}
+        signInRequired
+        onAction={onAction}
+      />,
+    );
+    expect(screen.getByText(/Sign in to use Anonymise & Paste/i)).toBeTruthy();
+    expect(screen.queryByText('Paste anonymously · Pro')).toBeNull();
+    fireEvent.click(screen.getByText('Sign in to paste anonymously'));
+    expect(onAction).toHaveBeenCalledWith('upgrade');
+  });
+
   test('a Pro user never sees the quota notice', () => {
     render(
       <Overlay

@@ -83,6 +83,18 @@ describe('buildPlanView', () => {
     expect(anon.note).toMatch(/Sep 1 \(UTC\)/);
   });
 
+  it('signed out after launch: the row asks for sign-in, not a reset date', () => {
+    const v = buildPlanView({
+      tier: 'free',
+      pro: false,
+      quota: { ...usage(0), signInRequired: true },
+      nowMs: AUGUST,
+    });
+    const anon = v.rows.find((r) => r.key === 'anonymise')!;
+    expect(anon).toMatchObject({ state: 'locked', detail: 'Sign in' });
+    expect(anon.note).toMatch(/free account includes 10/i);
+  });
+
   // P1-16: a seat holder must be told the plan is their team's.
   it('carries the team through so the card can say who provides the seat', () => {
     const member = buildPlanView({

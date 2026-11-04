@@ -272,7 +272,9 @@ on-device in `lib/quota/offline.ts` — deliberately obfuscated (XOR-folded toke
 storage key) so it doesn't read as a plain counter; a UX gate, not a security boundary. Signed in, it
 routes to the Worker's `/v1/usage`, which reconciles the offline count forward with a MAX-only seed
 (`X-SI-Offline-Used`), so signing in never grants a fresh allowance. Pro is unlimited. Backend
-unreachable → fall back to the on-device count.
+unreachable → fall back to the on-device count. From launch (signed config `plansEnforced: true`)
+Anonymise needs sign-in: signed out, the overlay and popup say "Sign in" and the background
+refuses the consume; detection and warnings stay free and signed out.
 
 ### Counting installs and uninstalls
 
