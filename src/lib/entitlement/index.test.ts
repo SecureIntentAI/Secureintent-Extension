@@ -40,6 +40,8 @@ describe('evaluateBlob', () => {
   test('valid + unexpired → unlocked', () => {
     expect(evaluateBlob(proBlob(), 1500, true)).toEqual({
       plan: 'developer_pro',
+      tier: 'browser_pro',
+      trial: { state: 'none', endsAt: null },
       pro: true,
       features: ['rehydrate', 'ghost', 'session_lock'],
       source: 'paddle',
@@ -48,12 +50,36 @@ describe('evaluateBlob', () => {
       org: null,
     });
   });
+  test('reads the package and trial from a newer blob', () => {
+    const e = evaluateBlob(
+      proBlob({ tier: 'desktop_pro', trial: { state: 'active', endsAt: 1_800_000_000 }, source: 'trial' }),
+      1500,
+      true,
+    );
+    expect(e).toMatchObject({ tier: 'desktop_pro', trial: { state: 'active', endsAt: 1_800_000_000 } });
+  });
+  test('an older blob (plan only) maps to its package, with no trial', () => {
+    expect(evaluateBlob(proBlob({ plan: 'business_pro' }), 1500, true)).toMatchObject({
+      tier: 'business',
+      trial: { state: 'none', endsAt: null },
+    });
+  });
+  test('an unknown tier or malformed trial falls back safely', () => {
+    const e = evaluateBlob(
+      proBlob({ tier: 'platinum' as never, trial: { state: 'forever' } as never }),
+      1500,
+      true,
+    );
+    expect(e).toMatchObject({ tier: 'browser_pro', trial: { state: 'none', endsAt: null } });
+  });
   test('carries the account email through for display', () => {
     expect(evaluateBlob(proBlob({ email: 'dev@acme.com' }), 1500, true).email).toBe('dev@acme.com');
   });
   test('invalid signature → free', () => {
     expect(evaluateBlob(proBlob(), 1500, false)).toEqual({
       plan: 'developer',
+      tier: 'free',
+      trial: { state: 'none', endsAt: null },
       pro: false,
       features: [],
       source: 'none',
@@ -65,6 +91,8 @@ describe('evaluateBlob', () => {
   test('expired → free even if signature valid', () => {
     expect(evaluateBlob(proBlob({ exp: 1200 }), 1500, true)).toEqual({
       plan: 'developer',
+      tier: 'free',
+      trial: { state: 'none', endsAt: null },
       pro: false,
       features: [],
       source: 'none',
@@ -107,6 +135,8 @@ describe('evaluateStored', () => {
   test('null → free', async () => {
     expect(await evaluateStored(null, 1500)).toEqual({
       plan: 'developer',
+      tier: 'free',
+      trial: { state: 'none', endsAt: null },
       pro: false,
       features: [],
       source: 'none',

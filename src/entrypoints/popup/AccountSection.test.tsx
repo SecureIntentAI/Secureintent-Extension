@@ -37,6 +37,8 @@ vi.mock('@/lib/entitlement', async (importOriginal) => ({
 
 const FREE: ActiveEntitlement = {
   plan: 'developer',
+  tier: 'free',
+  trial: { state: 'none', endsAt: null },
   pro: false,
   features: [],
   source: 'none',
@@ -47,6 +49,7 @@ const FREE: ActiveEntitlement = {
 const seat = (role: string): ActiveEntitlement => ({
   ...FREE,
   plan: 'business_pro',
+  tier: 'business',
   pro: true,
   source: 'org_seat',
   org: { id: 'org_1', name: 'Acme Corp', role },
@@ -71,10 +74,10 @@ afterEach(() => {
 });
 
 describe('AccountSection — Chrome (Clerk SDK)', () => {
-  test('a member sees Developer Pro protection and the team name', async () => {
+  test('a member sees the Business package and the team name', async () => {
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    expect(await screen.findByText('Developer Pro · Acme Corp')).toBeTruthy();
+    expect(await screen.findByText('Business · Acme Corp')).toBeTruthy();
   });
 
   test('an admin gets the team console link; a member does not', async () => {
@@ -85,7 +88,7 @@ describe('AccountSection — Chrome (Clerk SDK)', () => {
 
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    await screen.findByText('Developer Pro · Acme Corp');
+    await screen.findByText('Business · Acme Corp');
     expect(screen.queryByText('Manage team')).toBeNull();
     expect(screen.queryByText('Shadow AI')).toBeNull();
   });
@@ -152,14 +155,14 @@ describe('AccountSection — Firefox (cookie auth)', () => {
   test('a team seat names the team and gives an admin the console link', async () => {
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:admin'));
     render(<AccountSection />);
-    expect(await screen.findByText('Business Pro · Acme Corp')).toBeTruthy();
+    expect(await screen.findByText('Business · Acme Corp')).toBeTruthy();
     expect(screen.getByText('Manage team')).toBeTruthy();
   });
 
   test('a member sees the team but no console link', async () => {
     vi.mocked(getActiveEntitlement).mockResolvedValue(seat('org:member'));
     render(<AccountSection />);
-    await screen.findByText('Developer Pro · Acme Corp');
+    await screen.findByText('Business · Acme Corp');
     expect(screen.queryByText('Manage team')).toBeNull();
     expect(screen.queryByText('Shadow AI')).toBeNull();
   });
@@ -210,7 +213,7 @@ describe.each(['Chrome', 'Firefox'])('policy notice — %s', (browserName) => {
     );
     mounted.unmount();
     render(<AccountSection />);
-    await screen.findByText('Developer Pro · Acme Corp');
+    await screen.findByText('Business · Acme Corp');
     expect(screen.queryByText('Team policy revision 7 downloaded')).toBeNull();
     await act(() => configItem.setValue(policyBundle(8)));
     expect(await screen.findByText('Team policy revision 8 downloaded')).toBeTruthy();
@@ -219,7 +222,7 @@ describe.each(['Chrome', 'Firefox'])('policy notice — %s', (browserName) => {
   test('a policy for another organization is never announced and removing the bundle hides the notice', async () => {
     await configItem.setValue(policyBundle(99, 'org_other'));
     render(<AccountSection />);
-    await screen.findByText('Developer Pro · Acme Corp');
+    await screen.findByText('Business · Acme Corp');
     expect(screen.queryByText(/Team policy revision/)).toBeNull();
     await act(() => configItem.setValue(policyBundle(7)));
     await screen.findByText('Team policy revision 7 downloaded');

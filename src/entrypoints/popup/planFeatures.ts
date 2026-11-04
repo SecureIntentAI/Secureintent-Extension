@@ -1,4 +1,7 @@
+import type { Tier, TrialInfo } from '@/lib/entitlement/types';
 import { formatQuotaReset, type QuotaStatus } from '@/lib/quota';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Visual state of a feature row in the "Your plan" checklist. */
 export type FeatureState = 'active' | 'usage' | 'locked' | 'soon';
@@ -19,9 +22,20 @@ export interface PlanOrgView {
   isAdmin: boolean;
 }
 
+/** A running trial: how long is left, for the card to say. */
+export interface PlanTrialView {
+  daysLeft: number;
+  /** e.g. "3 Dec": the trial's last day, in the user's locale. */
+  endsOn: string;
+}
+
 export interface PlanView {
   planLabel: string;
   isPro: boolean;
+  /** Set while the 30-day Desktop Pro trial is running. */
+  trial: PlanTrialView | null;
+  /** The account can still start its one trial: show Start trial. */
+  canStartTrial: boolean;
   /** Set when this plan is a team seat, so the card can say who provides it. */
   org: PlanOrgView | null;
   /**
@@ -34,11 +48,24 @@ export interface PlanView {
   rows: FeatureRow[];
 }
 
-const PLAN_LABEL: Record<'developer' | 'developer_pro' | 'business_pro', string> = {
-  developer: 'Free',
-  developer_pro: 'Developer Pro',
-  business_pro: 'Business Pro',
+/** The package names (KAU-25), one spelling each, used by every popup surface. */
+export const TIER_LABEL: Record<Tier, string> = {
+  free: 'Browser Free',
+  browser_pro: 'Browser Pro',
+  desktop_pro: 'Desktop Pro',
+  business: 'Business',
 };
+
+/** The trial's days left and last day, or null when it is not running. */
+function trialView(trial: TrialInfo, nowMs: number): PlanTrialView | null {
+  if (trial.state !== 'active' || trial.endsAt === null) return null;
+  const endsMs = trial.endsAt * 1000;
+  if (endsMs <= nowMs) return null;
+  return {
+    daysLeft: Math.ceil((endsMs - nowMs) / DAY_MS),
+    endsOn: new Date(endsMs).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+  };
+}
 
 /**
  * Feature names are product names: one spelling each, used verbatim in the popup
@@ -128,8 +155,9 @@ function anonymiseRow(quota: QuotaStatus, nowMs: number): FeatureRow {
  * the Pro toolkit (active or locked), then the Business team features.
  */
 export function buildPlanView(input: {
-  plan: 'developer' | 'developer_pro' | 'business_pro';
+  tier: Tier;
   pro: boolean;
+  trial?: TrialInfo;
   quota: QuotaStatus;
   /** The entitlement's org, when this plan is a seat someone else pays for. */
   org?: { name: string | null; role: string | null } | null;
@@ -138,7 +166,7 @@ export function buildPlanView(input: {
   /** Injectable clock — the quota reset date is derived from it. */
   nowMs?: number;
 }): PlanView {
-  const { plan, pro, quota, org = null, teamRules = 0, nowMs = Date.now() } = input;
+  const { tier, pro, quota, trial = { state: 'none', endsAt: null }, org = null, teamRules = 0, nowMs = Date.now() } = input;
 
   const rows: FeatureRow[] = [
     {
@@ -154,10 +182,10 @@ export function buildPlanView(input: {
         ? { ...f, state: 'active' as const, detail: 'Active' }
         : { ...f, state: 'locked' as const, detail: 'Pro' },
     ),
-    // "Business", not "Pro": a Developer Pro user already is Pro, so telling them
+    // "Business", not "Pro": a Browser Pro user already is Pro, so telling them
     // to upgrade to Pro for these would be a dead end.
     ...BUSINESS_TOOLKIT.map((f) =>
-      plan === 'business_pro'
+      tier === 'business'
         ? { ...f, state: 'active' as const, detail: 'Active' }
         : { ...f, state: 'locked' as const, detail: 'Business' },
     ),
@@ -165,9 +193,11 @@ export function buildPlanView(input: {
   ];
 
   return {
-    planLabel:
-      plan === 'business_pro' && org?.role === 'org:member' ? 'Developer Pro' : PLAN_LABEL[plan],
+    // Every Business seat is the Business package, admin or member alike.
+    planLabel: TIER_LABEL[tier],
     isPro: pro,
+    trial: trialView(trial, nowMs),
+    canStartTrial: trial.state === 'available' && !org,
     org: org ? { name: org.name ?? 'your team', isAdmin: org.role === 'org:admin' } : null,
     // Clamped: a negative or fractional count could only come from a bug, and
     // the card renders this number to the user.

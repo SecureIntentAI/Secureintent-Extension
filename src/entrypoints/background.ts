@@ -17,6 +17,7 @@ import {
   getUsageStatus,
   invalidateEntitlementRefresh,
   refreshEntitlementBg,
+  startTrialBg,
 } from '@/services/entitlementBackground';
 import { injectOpenTabs } from '@/services/injectOpenTabs';
 import { markInstallPending, reportInstall, syncUninstallUrl } from '@/services/installAttribution';
@@ -273,6 +274,11 @@ export default defineBackground(() => {
     // Popup asked to refresh the entitlement (e.g. after sign-in / returning from checkout).
     if (type === 'si-refresh-entitlement') {
       refreshEntitlementBg().then(sendResponse);
+      return true;
+    }
+    // Popup's Start trial: the account's one 30-day Desktop Pro trial.
+    if (type === 'si-start-trial') {
+      startTrialBg().then(sendResponse);
       return true;
     }
     handleRefreshMessage(msg).then(sendResponse);

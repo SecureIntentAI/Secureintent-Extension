@@ -195,6 +195,51 @@ export async function consumeUsage(): Promise<unknown | null> {
   }
 }
 
+/** What Start trial came back with, for the popup to say. */
+export type StartTrialResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: 'signed_out' | 'not_open' | 'used' | 'not_needed' | 'unverified' | 'unavailable';
+    };
+
+const TRIAL_ERRORS: Record<string, StartTrialResult> = {
+  trials_not_open: { ok: false, reason: 'not_open' },
+  trial_used: { ok: false, reason: 'used' },
+  trial_not_needed: { ok: false, reason: 'not_needed' },
+  email_unverified: { ok: false, reason: 'unverified' },
+};
+
+/**
+ * Start the account's one 30-day Desktop Pro trial, then fetch the new signed
+ * plan. The Worker answers 200 when it is already running, so this is safe to
+ * call twice; the plan itself only ever comes from /v1/entitlement.
+ */
+export async function startTrialBg(): Promise<StartTrialResult> {
+  let result: StartTrialResult;
+  try {
+    result = await withDeadline(async (signal) => {
+      const token = await abortable(getClerkToken(), signal);
+      if (!token) return { ok: false, reason: 'signed_out' } as const;
+      const res = await fetch(`${API_BASE}/v1/trial/start`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: '{}',
+        signal,
+      });
+      if (res.ok) return { ok: true } as const;
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      return TRIAL_ERRORS[body?.error ?? ''] ?? ({ ok: false, reason: 'unavailable' } as const);
+    });
+  } catch {
+    return { ok: false, reason: 'unavailable' };
+  }
+  // A refused start can still mean the plan moved on (used up, or already
+  // included), so the cached plan is re-read either way.
+  if (result.ok || result.reason !== 'unavailable') await refreshEntitlementBg().catch(() => {});
+  return result;
+}
+
 // Note: there is deliberately no in-extension checkout starter here. Buying a
 // plan happens on the account page (ACCOUNT_URL), which already runs the Paddle
 // flow against the signed-in web session — a second, extension-initiated path

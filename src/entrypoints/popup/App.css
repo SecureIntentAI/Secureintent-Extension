@@ -315,6 +315,49 @@
   color: var(--si-text);
   font-weight: 600;
 }
+/* The 30-day Desktop Pro trial: days left while it runs, Start trial before. */
+.si-plan-trial {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--si-muted);
+}
+.si-plan-trial b {
+  color: var(--si-text);
+  font-weight: 600;
+}
+.si-plan-trial-offer {
+  margin: 8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.si-plan-trial-start {
+  padding: 5px 12px;
+  font-family: var(--si-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--si-cyan);
+  background: transparent;
+  border: 1px solid var(--si-cyan);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.si-plan-trial-start:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.si-plan-trial-note {
+  font-size: 11px;
+  color: var(--si-muted);
+}
+.si-plan-trial-error {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--si-text);
+}
 /* The team's own detection rules are in force. Deliberately understated: one
    line with a small outlined chip, only ever shown when the bundle has some. */
 .si-plan-team-rules {
