@@ -3,27 +3,29 @@ import { hasFingerprintContext, isPlaceholderCredentialValue, shannon } from './
 
 const KEY_NAME =
   /(?:^|[_-])(?:api[_-]?key|access[_-]?token|auth(?:orization)?|client[_-]?secret|credential|password|passwd|private[_-]?key|secret|token)(?:$|[_-])/i;
+/**
+ * A field that names something public or derived (a key id, a client id, a
+ * count, a name, a hash), so its value is not a credential. The word has to be
+ * what the field IS, at the end of its name: `api_key_id` is an id,
+ * `key_id_secret` is a secret. Appearing anywhere in the name is not enough,
+ * or a secret field could be hidden behind a public-sounding prefix.
+ */
 function publicField(name: string): boolean {
   const normalized = name
     .replace(/([a-z])([A-Z])/g, '$1_$2')
     .replace(/[.\s:]+/g, '_')
     .toLowerCase();
-  return /(?:^|[_-])(?:public[_-]?key|key[_-]?id|client[_-]?id|token[_-]?count|secret[_-]?name|password[_-]?hash)(?:$|[_-])/.test(
+  return /(?:^|[_-])(?:public[_-]?key|key[_-]?id|client[_-]?id|token[_-]?count|secret[_-]?name|password[_-]?hash)$/.test(
     normalized,
   );
 }
 
 function secretField(name: string): boolean {
+  if (publicField(name)) return false;
   const normalized = name
     .replace(/([a-z])([A-Z])/g, '$1_$2')
     .replace(/[.\s:]+/g, '_')
     .toLowerCase();
-  if (
-    /(?:^|[_-])(?:public[_-]?key|key[_-]?id|client[_-]?id|token[_-]?count|secret[_-]?name|password[_-]?hash)(?:$|[_-])/.test(
-      normalized,
-    )
-  )
-    return false;
   return KEY_NAME.test(normalized);
 }
 

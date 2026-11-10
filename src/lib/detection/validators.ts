@@ -13,13 +13,20 @@ export type ValidatorName =
 
 const PLACEHOLDER_VALUE =
   /^(?:changeme|replace[_ -]?me|your[_ -]?(?:api[_ -]?)?(?:key|token|secret)|example|sample|placeholder|dummy|test|none|null|undefined|redacted|<[^>]+>|\*+)$/i;
+// One reference to a secret kept somewhere else, and nothing more: `${DB_PASSWORD}`,
+// `${{ secrets.TOKEN }}`, `{{ .Values.password }}`. The braces are required: a
+// bare `$word` is how some real passwords start, so it is not a placeholder.
+// Anything beyond the name is a literal (`${DB_PASSWORD:-hunter2}` holds one).
+// Same rule as the desktop app's `is_reference`.
+const REFERENCE_VALUE =
+  /^(?:\$\{[A-Za-z_][A-Za-z0-9_.]*\}|\$?\{\{\s*\.?[A-Za-z_][A-Za-z0-9_.-]*\s*\}\})$/;
 
 export function isPlaceholderCredentialValue(raw: string): boolean {
   let value = raw.trim();
   if (value.length >= 2 && (value[0] === '"' || value[0] === "'") && value.at(-1) === value[0]) {
     value = value.slice(1, -1).trim();
   }
-  return PLACEHOLDER_VALUE.test(value);
+  return PLACEHOLDER_VALUE.test(value) || REFERENCE_VALUE.test(value);
 }
 
 function credential(raw: string): boolean {
@@ -43,11 +50,27 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-// Network IIN prefix + length + Luhn keeps timestamps and order IDs from matching.
+// Network IIN prefix, the length that network issues, Luhn, and the way a card
+// number is written keep timestamps, order ids and tracking numbers out: a
+// 16-digit run passes Luhn one time in ten on its own.
+const CARD_NETWORKS: Array<{ prefix: RegExp; lengths: number[] }> = [
+  { prefix: /^4/, lengths: [16, 19] }, // Visa (13-digit cards are no longer issued)
+  { prefix: /^(?:5[1-5]|2(?:2[2-9]|[3-6]\d|7[01])|2720)/, lengths: [16] }, // Mastercard
+  { prefix: /^3[47]/, lengths: [15] }, // American Express
+  { prefix: /^(?:6011|65|64[4-9])/, lengths: [16, 19] }, // Discover
+];
+// With separators the digits come in the groups a card is printed in.
+const CARD_GROUPS: Record<number, RegExp> = {
+  15: /^\d{4}([ -])\d{6}\1\d{5}$/,
+  16: /^\d{4}([ -])\d{4}\1\d{4}\1\d{4}$/,
+  19: /^\d{4}([ -])\d{4}\1\d{4}\1\d{4}\1\d{3}$/,
+};
 function card(raw: string): boolean {
-  const d = raw.replace(/[^0-9]/g, '');
-  if (d.length < 13 || d.length > 19) return false;
-  if (!/^(?:4|5[1-5]|2[2-7]|3[47]|6(?:011|5))/.test(d)) return false;
+  const written = raw.trim();
+  const d = written.replace(/[^0-9]/g, '');
+  const network = CARD_NETWORKS.find((n) => n.prefix.test(d));
+  if (!network || !network.lengths.includes(d.length)) return false;
+  if (written !== d && !CARD_GROUPS[d.length]?.test(written)) return false;
   return luhn(d);
 }
 

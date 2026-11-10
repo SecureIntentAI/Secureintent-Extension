@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { detectSecrets, GHOST_EXTRA_PATTERNS, redact } from './index';
+import { detectSecrets, GHOST_EXTRA_PATTERNS, mergeCatalog, redact } from './index';
 import { PATTERNS } from './patterns';
 import { githubTokenChecksum } from './validators';
 
@@ -472,5 +472,63 @@ describe('Possible API key (short prefixed internal keys)', () => {
 
   test('is skipped inside links, like the other random-string rules', () => {
     expect(labels('https://example.com/share/api_3Fv8Kq1Tz6Mn4Rw9')).toEqual([]);
+  });
+});
+
+describe('mergeCatalog', () => {
+  const served = (over: Partial<(typeof PATTERNS)[number]>) => ({
+    type: 'known-key' as const,
+    label: 'OpenAI API key',
+    regex: /sk-served-[a-z]{4}/g,
+    ...over,
+  });
+
+  test('a served rule replaces the built-in rule with the same label', () => {
+    const merged = mergeCatalog([served({})]);
+    const rule = merged.filter((p) => p.label === 'OpenAI API key');
+    expect(rule).toHaveLength(1);
+    expect(rule[0].regex.source).toBe('sk-served-[a-z]{4}');
+    expect(merged).toHaveLength(PATTERNS.length);
+    // The replacement sits where the built-in rule was, so ordering is unchanged.
+    expect(merged.findIndex((p) => p.label === 'OpenAI API key')).toBe(
+      PATTERNS.findIndex((p) => p.label === 'OpenAI API key'),
+    );
+    expect(detectSecrets('sk-served-abcd', merged).map((d) => d.label)).toEqual(['OpenAI API key']);
+  });
+
+  test('a built-in validator survives a served rule that omits it', () => {
+    const builtIn = PATTERNS.find((p) => p.label === 'Credit card number');
+    expect(builtIn?.validate).toBe('card');
+    const merged = mergeCatalog([
+      served({ type: 'pii', label: 'Credit card number', regex: /\b\d(?:[ -]?\d){11,18}\b/g }),
+    ]);
+    expect(merged.find((p) => p.label === 'Credit card number')?.validate).toBe('card');
+  });
+
+  test('rules under new labels are added and built-ins are never dropped', () => {
+    const merged = mergeCatalog([served({ label: 'Brand new key', regex: /bnk-[a-z]{6}/g })]);
+    expect(merged).toHaveLength(PATTERNS.length + 1);
+    expect(merged.at(-1)?.label).toBe('Brand new key');
+    for (const builtIn of PATTERNS)
+      expect(merged.some((p) => p.label === builtIn.label)).toBe(true);
+  });
+
+  test('a team rule with a built-in label is added, never swapped in', () => {
+    // Beside a served rule, or the bundle would count as team-only.
+    const merged = mergeCatalog([
+      served({ label: 'Brand new key', regex: /bnk-[a-z]{6}/g }),
+      served({ origin: 'team' }),
+    ]);
+    const rules = merged.filter((p) => p.label === 'OpenAI API key');
+    expect(rules).toHaveLength(2);
+    expect(rules[0].regex.source).toBe(
+      PATTERNS.find((p) => p.label === 'OpenAI API key')?.regex.source,
+    );
+    expect(rules[1].origin).toBe('team');
+  });
+
+  test('a bundle of only team rules replaces the catalogue', () => {
+    const team = [served({ label: 'Company key', origin: 'team' })];
+    expect(mergeCatalog(team)).toBe(team);
   });
 });

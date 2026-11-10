@@ -191,15 +191,31 @@ export function teamPatternsOnly(remote: Pattern[]): boolean {
 }
 
 /**
- * Baked-in detectors always run. A signed bundle can add rules (team patterns
- * and newly shipped names) but cannot drop a key format this build already
+ * Baked-in detectors always run, and the signed bundle keeps them current. A
+ * served rule with the same label as a built-in one replaces it in place (the
+ * bundle is where a rule is corrected without a new build); a field the served
+ * rule leaves out keeps the built-in value, so a validator such as the card
+ * check is never dropped by omission. Rules under new labels and team rules are
+ * added. Nothing a bundle leaves out drops a key format this build already
  * knows. A bundle that is only team rules replaces the catalogue on purpose.
  */
 export function mergeCatalog(remote: Pattern[]): Pattern[] {
   if (teamPatternsOnly(remote)) return remote;
+  const served = new Map<string, Pattern>();
+  for (const pattern of remote) {
+    if (pattern.origin !== 'team' && !served.has(pattern.label)) served.set(pattern.label, pattern);
+  }
   const known = new Set(PATTERNS.map((pattern) => pattern.label));
+  const current = PATTERNS.map((builtIn) => {
+    const update = served.get(builtIn.label);
+    if (!update) return builtIn;
+    const merged: Pattern = { ...builtIn, ...update };
+    if (update.validate === undefined && builtIn.validate !== undefined)
+      merged.validate = builtIn.validate;
+    return merged;
+  });
   const extra = remote.filter((pattern) => pattern.origin === 'team' || !known.has(pattern.label));
-  return [...PATTERNS, ...extra];
+  return [...current, ...extra];
 }
 
 /** Synchronous small-paste API; shares matching/ordering with the cooperative scan. */

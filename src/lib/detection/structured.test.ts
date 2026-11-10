@@ -150,3 +150,39 @@ test('flags a standalone unfamiliar URL-safe token only in aggressive mode', () 
     detectSecrets(`https://example.com/${value}`).some((d) => d.label === 'Possible unknown token'),
   ).toBe(false);
 });
+
+test('a public-sounding word hides nothing unless it is what the field is', () => {
+  const value = 'new-provider-8Jc5M9qR2vT6xY4z';
+  // The field IS an id or a count: not a credential.
+  expect(detectSecrets(`API_KEY_ID=${value}`)).toEqual([]);
+  expect(detectSecrets(`clientId: ${value}`)).toEqual([]);
+  // The word is only a prefix of a secret field: still a credential.
+  for (const text of [
+    `KEY_ID_SECRET=${value}`,
+    `client_id_password: ${value}`,
+    `public_key_token=${value}`,
+    `password_hash_secret=${value}`,
+  ]) {
+    expect(
+      detectSecrets(text).map((d) => d.match),
+      text,
+    ).toEqual([value]);
+  }
+});
+
+test('a reference to a secret held elsewhere is not a credential', () => {
+  for (const text of [
+    'DB_PASSWORD=${DB_PASSWORD}',
+    'api_key: "${{ secrets.API_KEY }}"',
+    'password: {{ .Values.password }}',
+  ]) {
+    expect(detectSecrets(text), text).toEqual([]);
+  }
+  // A default beside the reference, or a bare `$word`, is a literal value.
+  expect(detectSecrets('DB_PASSWORD=${DB_PASSWORD:-hunter2-x9Q4mT2v}').map((d) => d.match)).toEqual(
+    ['${DB_PASSWORD:-hunter2-x9Q4mT2v}'],
+  );
+  expect(detectSecrets('DB_PASSWORD=$ecretPass-x9Q4mT2v').map((d) => d.match)).toEqual([
+    '$ecretPass-x9Q4mT2v',
+  ]);
+});
