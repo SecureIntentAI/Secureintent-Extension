@@ -2,7 +2,7 @@
   "name": "secureintent-extension",
   "description": "Blocks secret pastes and scans supported text files locally. Business teams receive limited AI-service security metadata.",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "type": "module",
   "license": "UNLICENSED",
   "//core": "src/core.ts is an internal API barrel that groups the reusable guard/overlay/detection exports. No open-core split — this is a single extension with free and paid tiers (paid features gated at runtime by a signed entitlement). Not published as a package; stays private.",
