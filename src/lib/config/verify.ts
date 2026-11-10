@@ -16,8 +16,12 @@ const CONFIG_KEYS: Readonly<Record<string, string>> = {
 const ENTITLEMENT_KEYS: Readonly<Record<string, string>> = {
   'entitlement-2026-11': 'XXErXzAAMi5B20tFEWVt6La+eU+MRqyqEMdtdF4P+Mo=',
 };
-/** Public half of the deterministic e2e key (see e2e/signing.ts). */
-const E2E_KEY = 'iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=';
+/**
+ * Public half of the deterministic e2e key (see e2e/signing.ts). Static env
+ * reads, so a production build carries neither the flag nor this key.
+ */
+const E2E_KEY: string | undefined =
+  import.meta.env.WXT_E2E === '1' ? 'iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=' : undefined;
 
 /**
  * The trusted keys for a purpose. A local Worker build (scripts/e2e) may sign
@@ -26,12 +30,13 @@ const E2E_KEY = 'iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w=';
  * same ids. Read at call time so a test can set them before the first check.
  */
 export function trustedKeys(purpose: Purpose): Readonly<Record<string, string>> {
-  const env = import.meta.env as Record<string, string | undefined>;
   const keys = purpose === 'config' ? CONFIG_KEYS : ENTITLEMENT_KEYS;
-  const override =
-    (purpose === 'config' ? env.WXT_CONFIG_PUBLIC_KEY : env.WXT_ENTITLEMENT_PUBLIC_KEY) ||
-    env.WXT_POLICY_PUBLIC_KEY ||
-    (env.WXT_E2E === '1' ? E2E_KEY : undefined);
+  const override: string | undefined =
+    (purpose === 'config'
+      ? import.meta.env.WXT_CONFIG_PUBLIC_KEY
+      : import.meta.env.WXT_ENTITLEMENT_PUBLIC_KEY) ||
+    import.meta.env.WXT_POLICY_PUBLIC_KEY ||
+    E2E_KEY;
   if (!override) return keys;
   return Object.fromEntries(Object.keys(keys).map((id) => [id, override]));
 }
