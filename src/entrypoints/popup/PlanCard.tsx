@@ -4,7 +4,18 @@ import { ACCOUNT_URL, isAuthEnabled } from '@/lib/clerkConfig';
 import { getActiveBundle } from '@/lib/config';
 import { entitlementItem, getActiveEntitlement } from '@/lib/entitlement';
 import { getAnonymizeStatus } from '@/lib/quota';
+import type { StartTrialResult } from '@/services/entitlementBackground';
 import { buildPlanView, type FeatureState, type PlanView } from './planFeatures';
+
+/** Why Start trial didn't start one, in words for the person who pressed it. */
+const TRIAL_REFUSED: Record<Exclude<StartTrialResult, { ok: true }>['reason'], string> = {
+  signed_out: 'Sign in on the account page first, then try again.',
+  not_open: "The Desktop Pro trial isn't open yet.",
+  used: 'This account has already had its Desktop Pro trial.',
+  not_needed: 'Your plan already includes Desktop Pro.',
+  unverified: 'Verify your email on the account page first, then try again.',
+  unavailable: "Couldn't start the trial just now. Try again in a moment.",
+};
 
 function FeatureStateIcon({ state }: { state: FeatureState }) {
   if (state === 'soon') {
@@ -108,7 +119,7 @@ async function computeView(): Promise<PlanView> {
     actorId: null, // quota only needs plan + sign-in state
   };
   const [quota, teamRules] = await Promise.all([getAnonymizeStatus(snap), countTeamRules()]);
-  return buildPlanView({ plan: ent.plan, pro: ent.pro, quota, org: ent.org, teamRules });
+  return buildPlanView({ tier: ent.tier, pro: ent.pro, trial: ent.trial, quota, org: ent.org, teamRules });
 }
 
 /** "Your plan" card: every feature with its per-plan state (Active / usage / Pro). */
@@ -117,6 +128,8 @@ export function PlanCard() {
   const [open, setOpen] = useState(true);
   // Bumped on every run (and on unmount) so a superseded attempt can't paint.
   const runId = useRef(0);
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState<string | null>(null);
 
   useEffect(() => {
     planExpandedItem.getValue().then(setOpen);
@@ -160,6 +173,18 @@ export function PlanCard() {
       /* keep the cached view */
     }
   }, []);
+
+  const startTrial = async () => {
+    setTrialBusy(true);
+    setTrialError(null);
+    const result = (await browser.runtime
+      .sendMessage({ type: 'si-start-trial' })
+      .catch(() => null)) as StartTrialResult | null;
+    setTrialBusy(false);
+    if (!result?.ok) setTrialError(TRIAL_REFUSED[result?.reason ?? 'unavailable']);
+    // Repaint from the plan the background just re-fetched, started or not.
+    if (result && (result.ok || result.reason !== 'unavailable')) void load();
+  };
 
   useEffect(() => {
     void load();
@@ -239,6 +264,31 @@ export function PlanCard() {
           Team seat from <b>{view.org.name}</b>:{' '}
           {view.org.isAdmin ? 'you administer this team.' : 'managed by your admin.'}
         </p>
+      )}
+      {view.trial && (
+        <p className="si-plan-trial">
+          Desktop Pro trial:{' '}
+          <b>{view.trial.daysLeft === 1 ? '1 day left' : `${view.trial.daysLeft} days left`}</b>{' '}
+          (ends {view.trial.endsOn}).
+        </p>
+      )}
+      {view.canStartTrial && isAuthEnabled() && (
+        <div className="si-plan-trial-offer">
+          <button
+            type="button"
+            className="si-plan-trial-start"
+            onClick={() => void startTrial()}
+            disabled={trialBusy}
+          >
+            {trialBusy ? 'Starting…' : 'Start 30-day Desktop Pro trial'}
+          </button>
+          <span className="si-plan-trial-note">Free, no card. Once per account.</span>
+          {trialError && (
+            <p className="si-plan-trial-error" role="alert">
+              {trialError}
+            </p>
+          )}
+        </div>
       )}
       {/* Quiet reassurance for a member: the rules their admin wrote really are
         running here. Rendered only when the signed bundle actually carries some,

@@ -20,6 +20,10 @@ vi.mock('@/lib/entitlement', () => ({
 }));
 vi.mock('@/lib/quota', () => ({ getAnonymizeStatus }));
 vi.mock('@/lib/config', () => ({ getActiveBundle }));
+vi.mock('@/lib/clerkConfig', async (orig) => ({
+  ...(await orig<typeof import('@/lib/clerkConfig')>()),
+  isAuthEnabled: () => true,
+}));
 
 /** A bundle as the Worker serves it: default patterns bare, team ones marked. */
 const bundleWith = (teamPatterns: number) => ({
@@ -39,6 +43,8 @@ const bundleWith = (teamPatterns: number) => ({
 
 const FREE: ActiveEntitlement = {
   plan: 'developer',
+  tier: 'free',
+  trial: { state: 'none', endsAt: null },
   pro: false,
   features: [],
   source: 'none',
@@ -49,6 +55,7 @@ const FREE: ActiveEntitlement = {
 const seat = (role: string, name: string | null = 'Acme Corp'): ActiveEntitlement => ({
   ...FREE,
   plan: 'business_pro',
+  tier: 'business',
   pro: true,
   features: ['rehydrate', 'ghost', 'session_lock'],
   source: 'org_seat',
@@ -68,7 +75,7 @@ afterEach(() => cleanup());
 describe('PlanCard', () => {
   test('renders the plan tag and the feature checklist', async () => {
     render(<PlanCard />);
-    expect(await screen.findByText('Free')).toBeTruthy();
+    expect(await screen.findByText('Browser Free')).toBeTruthy();
     expect(screen.getByText('Ghost Log Sanitiser')).toBeTruthy();
     expect(screen.getByText('9 / 10 left')).toBeTruthy();
   });
@@ -88,9 +95,9 @@ describe('PlanCard', () => {
   });
 
   test('a personal plan says nothing about a team', async () => {
-    getActiveEntitlement.mockResolvedValue({ ...FREE, plan: 'developer_pro', pro: true });
+    getActiveEntitlement.mockResolvedValue({ ...FREE, plan: 'developer_pro', tier: 'browser_pro', pro: true });
     render(<PlanCard />);
-    await screen.findByText('Developer Pro');
+    await screen.findByText('Browser Pro');
     expect(screen.queryByText(/managed by your admin/i)).toBeNull();
   });
 
@@ -112,7 +119,7 @@ describe('PlanCard', () => {
 
   test('a user with no team sees nothing about team rules', async () => {
     const { container } = render(<PlanCard />); // FREE + a bundle with no team patterns
-    await screen.findByText('Free');
+    await screen.findByText('Browser Free');
     expect(container.querySelector('.si-plan-team-rules')).toBeNull();
     expect(screen.queryByText('Team rules')).toBeNull();
   });
@@ -127,7 +134,7 @@ describe('PlanCard', () => {
   test('an unreadable bundle never breaks the card — it just says nothing', async () => {
     getActiveBundle.mockRejectedValue(new Error('storage unavailable'));
     const { container } = render(<PlanCard />);
-    expect(await screen.findByText('Free')).toBeTruthy();
+    expect(await screen.findByText('Browser Free')).toBeTruthy();
     expect(container.querySelector('.si-plan-team-rules')).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -143,14 +150,67 @@ describe('PlanCard', () => {
 
     // Retry recovers: the next read succeeds and the checklist appears.
     fireEvent.click(screen.getByText('Try again'));
-    expect(await screen.findByText('Free')).toBeTruthy();
+    expect(await screen.findByText('Browser Free')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
   test('a live-refresh failure keeps the cached plan on screen', async () => {
     vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockRejectedValue(new Error('no background'));
     render(<PlanCard />);
-    expect(await screen.findByText('Free')).toBeTruthy();
+    expect(await screen.findByText('Browser Free')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // KAU-58: the 30-day Desktop Pro trial.
+  describe('Desktop Pro trial', () => {
+    const NOW_SEC = Math.floor(Date.now() / 1000);
+
+    test('a running trial shows the days left', async () => {
+      getActiveEntitlement.mockResolvedValue({
+        ...FREE,
+        plan: 'developer_pro',
+        tier: 'desktop_pro',
+        pro: true,
+        source: 'trial',
+        trial: { state: 'active', endsAt: NOW_SEC + 12 * 86_400 - 60 },
+      });
+      render(<PlanCard />);
+      expect(await screen.findByText('12 days left')).toBeTruthy();
+      expect(screen.queryByText(/Start 30-day/)).toBeNull();
+    });
+
+    test('Start trial asks the background, then shows the new plan', async () => {
+      const available = { ...FREE, trial: { state: 'available' as const, endsAt: null } };
+      getActiveEntitlement.mockResolvedValue(available);
+      const send = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (msg) => {
+        if ((msg as { type: string }).type === 'si-start-trial') {
+          getActiveEntitlement.mockResolvedValue({
+            ...FREE,
+            plan: 'developer_pro',
+            tier: 'desktop_pro',
+            pro: true,
+            trial: { state: 'active', endsAt: NOW_SEC + 30 * 86_400 },
+          });
+          return { ok: true };
+        }
+        return { status: 'unchanged' };
+      });
+      render(<PlanCard />);
+      fireEvent.click(await screen.findByText('Start 30-day Desktop Pro trial'));
+      expect(await screen.findByText('30 days left')).toBeTruthy();
+      expect(send).toHaveBeenCalledWith({ type: 'si-start-trial' });
+    });
+
+    test('a refused start says why, in plain words', async () => {
+      getActiveEntitlement.mockResolvedValue({ ...FREE, trial: { state: 'available', endsAt: null } });
+      vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (msg) =>
+        (msg as { type: string }).type === 'si-start-trial'
+          ? { ok: false, reason: 'not_open' }
+          : { status: 'unchanged' },
+      );
+      render(<PlanCard />);
+      fireEvent.click(await screen.findByText('Start 30-day Desktop Pro trial'));
+      expect((await screen.findByRole('alert')).textContent).toMatch(/isn't open yet/);
+    });
   });
 });

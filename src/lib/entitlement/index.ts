@@ -4,9 +4,32 @@ import {
   type ActiveEntitlement,
   type FeatureKey,
   FREE_ENTITLEMENT,
+  NO_TRIAL,
   type SignedEntitlement,
   type StoredEntitlement,
+  type Tier,
+  type TrialInfo,
 } from './types';
+
+/** The package an older blob (plan only) stands for, as the Worker maps them. */
+const TIER_FOR_PLAN: Record<SignedEntitlement['plan'], Tier> = {
+  developer: 'free',
+  developer_pro: 'browser_pro',
+  business_pro: 'business',
+};
+const TIERS: readonly Tier[] = ['free', 'browser_pro', 'desktop_pro', 'business'];
+const TRIAL_STATES: readonly TrialInfo['state'][] = ['none', 'available', 'active', 'used'];
+
+/** The trial as signed, or none when the blob has no (or a malformed) trial. */
+function trialOf(t: unknown): TrialInfo {
+  if (!t || typeof t !== 'object') return NO_TRIAL;
+  const { state, endsAt } = t as { state?: unknown; endsAt?: unknown };
+  if (!TRIAL_STATES.includes(state as TrialInfo['state'])) return NO_TRIAL;
+  return {
+    state: state as TrialInfo['state'],
+    endsAt: typeof endsAt === 'number' && Number.isFinite(endsAt) ? endsAt : null,
+  };
+}
 
 export type { ActiveEntitlement, FeatureKey, SignedEntitlement, StoredEntitlement };
 export { entitlementItem, FREE_ENTITLEMENT };
@@ -45,6 +68,8 @@ export function evaluateBlob(
   if (expectedUserId !== undefined && blob.clerkUserId !== expectedUserId) return FREE_ENTITLEMENT;
   return {
     plan: blob.plan,
+    tier: blob.tier && TIERS.includes(blob.tier) ? blob.tier : TIER_FOR_PLAN[blob.plan],
+    trial: trialOf(blob.trial),
     pro: blob.pro,
     features: blob.features,
     source: blob.source,

@@ -17,12 +17,7 @@ import {
 } from '@/lib/entitlement';
 import type { RefreshResult } from '@/lib/entitlement/refresh';
 import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
-
-const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
-  developer: 'Free',
-  developer_pro: 'Developer Pro',
-  business_pro: 'Business Pro',
-};
+import { TIER_LABEL } from './planFeatures';
 
 /**
  * What the plan badge says. A seat says whose it is: an employee should be able
@@ -30,10 +25,7 @@ const PLAN_LABEL: Record<ActiveEntitlement['plan'], string> = {
  * Both browser paths use this, so the two bars can't drift apart again.
  */
 function planText(ent: ActiveEntitlement): string {
-  const label =
-    ent.plan === 'business_pro' && ent.org?.role === 'org:member'
-      ? 'Developer Pro'
-      : PLAN_LABEL[ent.plan];
+  const label = TIER_LABEL[ent.tier];
   return ent.org ? `${label} · ${ent.org.name ?? 'Team'}` : label;
 }
 
