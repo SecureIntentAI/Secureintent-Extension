@@ -172,14 +172,18 @@ test('a public-sounding word hides nothing unless it is what the field is', () =
 
 test('a reference to a secret held elsewhere is not a credential', () => {
   for (const text of [
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     'DB_PASSWORD=${DB_PASSWORD}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     'api_key: "${{ secrets.API_KEY }}"',
     'password: {{ .Values.password }}',
   ]) {
     expect(detectSecrets(text), text).toEqual([]);
   }
   // A default beside the reference, or a bare `$word`, is a literal value.
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
   expect(detectSecrets('DB_PASSWORD=${DB_PASSWORD:-hunter2-x9Q4mT2v}').map((d) => d.match)).toEqual(
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     ['${DB_PASSWORD:-hunter2-x9Q4mT2v}'],
   );
   expect(detectSecrets('DB_PASSWORD=$ecretPass-x9Q4mT2v').map((d) => d.match)).toEqual([

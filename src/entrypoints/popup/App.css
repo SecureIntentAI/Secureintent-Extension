@@ -1261,14 +1261,20 @@
   gap: 5px;
   margin-top: 8px;
   padding: 10px 12px;
-  border: 1px solid rgba(114, 255, 255, .35);
+  border: 1px solid rgba(114, 255, 255, 0.35);
   border-radius: 10px;
-  background: rgba(114, 255, 255, .08);
+  background: rgba(114, 255, 255, 0.08);
   font-size: 12px;
   line-height: 1.4;
 }
-.si-policy-notice span { color: var(--si-muted); }
-.si-policy-notice-actions { display: flex; gap: 12px; margin-top: 2px; }
+.si-policy-notice span {
+  color: var(--si-muted);
+}
+.si-policy-notice-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 2px;
+}
 .si-policy-notice-actions button {
   padding: 0;
   border: 0;

@@ -95,7 +95,12 @@ describe('PlanCard', () => {
   });
 
   test('a personal plan says nothing about a team', async () => {
-    getActiveEntitlement.mockResolvedValue({ ...FREE, plan: 'developer_pro', tier: 'browser_pro', pro: true });
+    getActiveEntitlement.mockResolvedValue({
+      ...FREE,
+      plan: 'developer_pro',
+      tier: 'browser_pro',
+      pro: true,
+    });
     render(<PlanCard />);
     await screen.findByText('Browser Pro');
     expect(screen.queryByText(/managed by your admin/i)).toBeNull();
@@ -202,7 +207,10 @@ describe('PlanCard', () => {
     });
 
     test('a refused start says why, in plain words', async () => {
-      getActiveEntitlement.mockResolvedValue({ ...FREE, trial: { state: 'available', endsAt: null } });
+      getActiveEntitlement.mockResolvedValue({
+        ...FREE,
+        trial: { state: 'available', endsAt: null },
+      });
       vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (msg) =>
         (msg as { type: string }).type === 'si-start-trial'
           ? { ok: false, reason: 'not_open' }

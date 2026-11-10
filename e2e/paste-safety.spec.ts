@@ -54,19 +54,29 @@ test('a queued second paste is checked after the first warning is resolved', asy
   await page.close();
 });
 
-test('oversized paste is explained and dismissal leaves the next paste protected', async ({
+test('oversized paste is checked as far as the limit, explained, and pasted only on request', async ({
   context,
 }) => {
   const page = await context.newPage();
   await page.route(SITE, (r) => r.fulfill({ contentType: 'text/html', body: HTML }));
   await page.goto(SITE);
   await page.locator('#ta').click();
-  await paste(page, 'x'.repeat(2_000_001));
+  const text = `${'x '.repeat(1_000_000)}tail`;
+  await paste(page, text);
   const status = page.locator('secureintent-paste-status');
-  await expect(status.getByText('Paste is too large', { exact: true })).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath('paste-too-large.png') });
+  await expect(
+    status.getByText('Only part of this paste was checked', { exact: true }),
+  ).toBeVisible({ timeout: 15_000 });
+  await page.screenshot({ path: test.info().outputPath('paste-partly-checked.png') });
   await expect(page.locator('#ta')).toHaveValue('');
-  await status.getByRole('button', { name: 'Dismiss' }).click();
+  await status.getByRole('button', { name: 'Cancel' }).click();
+  await expect(status).toHaveCount(0);
+  await expect(page.locator('#ta')).toHaveValue('');
+  // Pasting anyway inserts the whole text, the unchecked part included.
+  await page.locator('#ta').click();
+  await paste(page, text);
+  await status.getByRole('button', { name: 'Paste anyway' }).click({ timeout: 15_000 });
+  await expect(page.locator('#ta')).toHaveValue(text);
   await expect(status).toHaveCount(0);
   await page.locator('#ta').click();
   await paste(page, SECRET);

@@ -119,7 +119,14 @@ async function computeView(): Promise<PlanView> {
     actorId: null, // quota only needs plan + sign-in state
   };
   const [quota, teamRules] = await Promise.all([getAnonymizeStatus(snap), countTeamRules()]);
-  return buildPlanView({ tier: ent.tier, pro: ent.pro, trial: ent.trial, quota, org: ent.org, teamRules });
+  return buildPlanView({
+    tier: ent.tier,
+    pro: ent.pro,
+    trial: ent.trial,
+    quota,
+    org: ent.org,
+    teamRules,
+  });
 }
 
 /** "Your plan" card: every feature with its per-plan state (Active / usage / Pro). */

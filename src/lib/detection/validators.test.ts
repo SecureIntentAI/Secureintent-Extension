@@ -51,13 +51,18 @@ describe('card', () => {
 
 describe('isPlaceholderCredentialValue', () => {
   test('a reference in braces is a placeholder; a bare dollar word is not', () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     expect(isPlaceholderCredentialValue('${DB_PASSWORD}')).toBe(true);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     expect(isPlaceholderCredentialValue('"${DB_PASSWORD}"')).toBe(true);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     expect(isPlaceholderCredentialValue('${{ secrets.TOKEN }}')).toBe(true);
     expect(isPlaceholderCredentialValue('{{ .Values.password }}')).toBe(true);
     expect(isPlaceholderCredentialValue('$ecretPass')).toBe(false);
     expect(isPlaceholderCredentialValue('$DB_PASSWORD')).toBe(false);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     expect(isPlaceholderCredentialValue('${DB_PASSWORD:-hunter2}')).toBe(false);
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a literal reference to a variable, not a template
     expect(isPlaceholderCredentialValue('${DB_PASSWORD}x')).toBe(false);
   });
 });
