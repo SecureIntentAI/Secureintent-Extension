@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 
 vi.mock('@/lib/config/verify', () => ({
-  verifyBundle: vi.fn(async (_payload: string, sig: string | null) => sig === 'valid'),
+  verifySigned: vi.fn(
+    async (_purpose: string, _payload: string, signatures: unknown) =>
+      (signatures as Record<string, string> | null)?.['entitlement-2026-11'] === 'valid',
+  ),
+  signatureMap: (value: unknown) =>
+    value && typeof value === 'object' ? (value as Record<string, string>) : null,
 }));
 
 import { refreshEntitlement } from './refresh';
@@ -35,7 +40,7 @@ beforeEach(() => {
 
 describe('refreshEntitlement', () => {
   test('signed-out clears the cache', async () => {
-    await entitlementItem.setValue({ blob, signature: 'valid' });
+    await entitlementItem.setValue({ blob, signatures: { 'entitlement-2026-11': 'valid' } });
     const r = await refreshEntitlement(async () => null);
     expect(r.status).toBe('signed-out');
     expect(await entitlementItem.getValue()).toBeNull();
@@ -46,7 +51,10 @@ describe('refreshEntitlement', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ entitlement: blob, signature: 'valid' }), { status: 200 }),
+          new Response(
+            JSON.stringify({ entitlement: blob, signatures: { 'entitlement-2026-11': 'valid' } }),
+            { status: 200 },
+          ),
       ),
     );
     const r = await refreshEntitlement(async () => 'tok');
@@ -55,12 +63,15 @@ describe('refreshEntitlement', () => {
   });
 
   test('bad signature clears the cache', async () => {
-    await entitlementItem.setValue({ blob, signature: 'valid' });
+    await entitlementItem.setValue({ blob, signatures: { 'entitlement-2026-11': 'valid' } });
     vi.stubGlobal(
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ entitlement: blob, signature: 'forged' }), { status: 200 }),
+          new Response(
+            JSON.stringify({ entitlement: blob, signatures: { 'entitlement-2026-11': 'forged' } }),
+            { status: 200 },
+          ),
       ),
     );
     const r = await refreshEntitlement(async () => 'tok');
@@ -73,7 +84,10 @@ describe('refreshEntitlement', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ entitlement: blob, signature: 'valid' }), { status: 200 }),
+          new Response(
+            JSON.stringify({ entitlement: blob, signatures: { 'entitlement-2026-11': 'valid' } }),
+            { status: 200 },
+          ),
       ),
     );
     // blob.clerkUserId is 'user_1'; the token belongs to 'user_2'.
@@ -87,7 +101,10 @@ describe('refreshEntitlement', () => {
       'fetch',
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ entitlement: blob, signature: 'valid' }), { status: 200 }),
+          new Response(
+            JSON.stringify({ entitlement: blob, signatures: { 'entitlement-2026-11': 'valid' } }),
+            { status: 200 },
+          ),
       ),
     );
     const r = await refreshEntitlement(async () => tokenWithSub('user_1'));
@@ -96,7 +113,7 @@ describe('refreshEntitlement', () => {
   });
 
   test('HTTP error leaves the cache untouched', async () => {
-    await entitlementItem.setValue({ blob, signature: 'valid' });
+    await entitlementItem.setValue({ blob, signatures: { 'entitlement-2026-11': 'valid' } });
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('nope', { status: 500 })),

@@ -30,14 +30,19 @@ export interface SignedEntitlement {
   exp: number;
 }
 
-/** What we persist: the blob, its detached Ed25519 signature, and the exact JSON
- *  string the signature was computed over. We verify against `payload` (not a
- *  re-`JSON.stringify` of `blob`), because a storage round-trip can change the
- *  serialized byte order and break the signature check. `payload` is optional
- *  for backward-compat with values cached before this field existed. */
+/** What we persist: the blob, its labelled Ed25519 signatures (key id → detached
+ *  signature), and the exact JSON string they were computed over. We verify
+ *  against `payload` (not a re-`JSON.stringify` of `blob`), because a storage
+ *  round-trip can change the serialized byte order and break the signature
+ *  check. `payload` is optional for backward-compat with values cached before
+ *  this field existed. A value cached by an older build carries only the
+ *  unlabelled `signature`; it is not trusted and reads as free until the next
+ *  refresh replaces it. */
 export interface StoredEntitlement {
   blob: SignedEntitlement;
-  signature: string;
+  signatures?: Record<string, string>;
+  /** Written by builds before labelled keys. Never verified. */
+  signature?: string;
   payload?: string;
 }
 

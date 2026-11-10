@@ -69,6 +69,14 @@ export default defineBackground(() => {
     }
     // A page that was already open does not receive manifest content scripts.
     // Install and reload both need the guard attached to those tabs.
+    if (details.reason === 'update') {
+      // A new build trusts its own keys only: fetch the config and the
+      // entitlement again now, rather than at the next scheduled sync. A
+      // failed fetch keeps the cached values, as any other sync would.
+      invalidateConfigSync();
+      invalidateEntitlementRefresh();
+      void reconcile(true, { force: true }).catch(() => {});
+    }
     if (details.reason === 'install' || details.reason === 'update') {
       void injectOpenTabs();
       // Pairing is automatic now; a token pasted into an older version is not
@@ -86,10 +94,10 @@ export default defineBackground(() => {
   updateConsentBadge();
   syncUninstallUrl();
 
-  const reconcile = createSyncRunner(async (full) => {
+  const reconcile = createSyncRunner(async (full, options) => {
     await refreshEntitlementBg();
     const entitlement = await getActiveEntitlement();
-    if (full || entitlement.org) await syncConfig();
+    if (full || entitlement.org) await syncConfig(options);
     if (entitlement.org) {
       await reportBusinessConnection();
       await ensurePolicyStream();

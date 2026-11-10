@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
-import { verifyBundle } from '@/lib/config/verify';
+import { verifySigned } from '@/lib/config/verify';
 import { acceptTerms, consentItem } from '@/lib/consent';
 import { entitlementItem } from '@/lib/entitlement';
 import { getClerkToken } from './entitlementBackground';
@@ -18,7 +18,10 @@ import {
   TELEMETRY_RETRY_ALARM,
 } from './telemetryBackground';
 
-vi.mock('@/lib/config/verify', () => ({ verifyBundle: vi.fn(async () => true) }));
+vi.mock('@/lib/config/verify', () => ({
+  verifySigned: vi.fn(async () => true),
+  signatureMap: (value: unknown) => (value && typeof value === 'object' ? value : null),
+}));
 vi.mock('./entitlementBackground', () => ({ getClerkToken: vi.fn() }));
 const sender = 'https://chatgpt.com/private/conversation?private=discarded';
 let now: number;
@@ -57,7 +60,11 @@ async function account(userId = owner.userId, orgId: string | null = owner.orgId
     issuedAt: 0,
     exp: 9_999_999_999,
   };
-  await entitlementItem.setValue({ blob, payload: JSON.stringify(blob), signature: 'valid' });
+  await entitlementItem.setValue({
+    blob,
+    payload: JSON.stringify(blob),
+    signatures: { 'entitlement-2026-11': 'valid' },
+  });
   vi.mocked(getClerkToken).mockResolvedValue(jwt(userId, orgId));
 }
 const state = async () =>
@@ -89,7 +96,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   now = 1_800_000_000_000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
-  vi.mocked(verifyBundle).mockResolvedValue(true);
+  vi.mocked(verifySigned).mockResolvedValue(true);
   await acceptTerms();
   await account();
   fetchMock = vi.fn(async () => new Response(JSON.stringify({ accepted: 1 }), { status: 202 }));
@@ -337,7 +344,7 @@ test('rejects missing/forged original owners and invalid signatures without anon
       sender,
     ),
   ).toBeNull();
-  vi.mocked(verifyBundle).mockResolvedValue(false);
+  vi.mocked(verifySigned).mockResolvedValue(false);
   expect(await sendAuthenticatedTelemetry({ event: event(), owner }, sender)).toBeNull();
   expect(fetchMock).not.toHaveBeenCalled();
 });

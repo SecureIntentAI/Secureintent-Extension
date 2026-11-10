@@ -1,6 +1,6 @@
 import { API_BASE } from '@/lib/api/client';
 import { abortable } from '@/lib/async';
-import { verifyBundle } from '@/lib/config/verify';
+import { signatureMap, verifySigned } from '@/lib/config/verify';
 import { siDebug, siError } from '@/lib/debug';
 import { entitlementItem } from './store';
 import type { SignedEntitlement } from './types';
@@ -55,15 +55,15 @@ export async function refreshEntitlement(
     });
     if (!res.ok) return { status: 'error', error: `HTTP ${res.status}` };
 
-    const { entitlement, signature } = (await res.json()) as {
+    const { entitlement, signatures } = (await res.json()) as {
       entitlement: SignedEntitlement;
-      signature: string | null;
+      signatures?: unknown;
     };
 
     // Verify against — and later persist — this exact string, so the read-time
     // check uses identical bytes (a storage round-trip can reorder a re-stringify).
     const payload = JSON.stringify(entitlement);
-    const valid = signature && (await verifyBundle(payload, signature));
+    const valid = await verifySigned('entitlement', payload, signatures);
     signal?.throwIfAborted(); // a late result must not overwrite a newer session
     if (!valid) {
       siError('entitlement', 'signature verification failed; clearing', null);
@@ -80,7 +80,11 @@ export async function refreshEntitlement(
       return { status: 'cleared', error: 'user mismatch' };
     }
 
-    await entitlementItem.setValue({ blob: entitlement, signature, payload });
+    await entitlementItem.setValue({
+      blob: entitlement,
+      signatures: signatureMap(signatures) ?? {},
+      payload,
+    });
     siDebug('entitlement', 'refreshed', { plan: entitlement.plan, pro: entitlement.pro });
     return { status: 'updated', plan: entitlement.plan };
   } catch (err) {

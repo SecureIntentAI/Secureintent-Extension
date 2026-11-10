@@ -60,9 +60,39 @@ describe('config scheduler', () => {
     expect(run).toHaveBeenCalledTimes(1);
     reject(new Error('offline'));
     await pending;
-    expect(run.mock.calls).toEqual([[false], [true]]);
+    expect(run.mock.calls).toEqual([
+      [false, { force: false }],
+      [true, { force: false }],
+    ]);
     await reconcile(false);
-    expect(run.mock.calls).toEqual([[false], [true], [false]]);
+    expect(run.mock.calls).toEqual([
+      [false, { force: false }],
+      [true, { force: false }],
+      [false, { force: false }],
+    ]);
+  });
+
+  test('a forced refresh requested while a cycle runs is kept for the next cycle', async () => {
+    let finish!: () => void;
+    const run = vi
+      .fn<(full: boolean, options: { force?: boolean }) => Promise<void>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue(undefined);
+    const reconcile = createSyncRunner(run);
+    const first = reconcile(false);
+    await Promise.resolve();
+    reconcile(true, { force: true });
+    finish();
+    await first;
+    expect(run.mock.calls).toEqual([
+      [false, { force: false }],
+      [true, { force: true }],
+    ]);
   });
 
   test('refresh message triggers syncConfig and returns the result', async () => {

@@ -21,7 +21,10 @@ vi.mock('@/lib/clerkConfig', () => ({
   IS_FIREFOX: false,
   isAuthEnabled: () => true,
 }));
-vi.mock('@/lib/config/verify', () => ({ verifyBundle: vi.fn(async () => true) }));
+vi.mock('@/lib/config/verify', () => ({
+  verifySigned: vi.fn(async () => true),
+  signatureMap: (value: unknown) => (value && typeof value === 'object' ? value : null),
+}));
 
 const blob: SignedEntitlement = {
   clerkUserId: 'user_1',
@@ -34,7 +37,10 @@ const blob: SignedEntitlement = {
   issuedAt: 1,
   exp: 9_999_999_999,
 };
-const response = () => new Response(JSON.stringify({ entitlement: blob, signature: 'valid' }));
+const response = () =>
+  new Response(
+    JSON.stringify({ entitlement: blob, signatures: { 'entitlement-2026-11': 'valid' } }),
+  );
 
 beforeEach(() => {
   invalidateEntitlementRefresh();
@@ -145,7 +151,10 @@ test('an offline refresh still clears a cached plan from a different known user'
 
 test("an outage retains the same user's cached team rules", async () => {
   const teamBlob = { ...blob, org: { id: 'org_current', name: 'Current', role: 'org:member' } };
-  await entitlementItem.setValue({ blob: teamBlob, signature: 'valid' });
+  await entitlementItem.setValue({
+    blob: teamBlob,
+    signatures: { 'entitlement-2026-11': 'valid' },
+  });
   const config = {
     ...DEFAULT_BUNDLE,
     policy: {

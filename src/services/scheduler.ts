@@ -32,24 +32,33 @@ export async function ensureSyncAlarms(): Promise<void> {
 }
 
 /** Share a running cycle and remember requests arriving while it is pending. */
-export function createSyncRunner(run: (full: boolean) => Promise<void>) {
+export interface SyncRunOptions {
+  /** Replace the stored config even at the same version (once, after an update). */
+  force?: boolean;
+}
+
+export function createSyncRunner(run: (full: boolean, options: SyncRunOptions) => Promise<void>) {
   let running: Promise<void> | undefined;
   let pending = false;
   let fullPending = false;
-  return (full: boolean): Promise<void> => {
+  let forcePending = false;
+  return (full: boolean, options: SyncRunOptions = {}): Promise<void> => {
     pending = true;
     fullPending ||= full;
+    forcePending ||= Boolean(options.force);
     if (running) return running;
     running = (async () => {
       await Promise.resolve(); // assign running before even a synchronous failure
       try {
         while (pending) {
           const fullCycle = fullPending;
+          const cycleOptions = { force: forcePending };
           pending = false;
           fullPending = false;
+          forcePending = false;
           // A failed cycle must not discard a newer account's pending refresh.
           try {
-            await run(fullCycle);
+            await run(fullCycle, cycleOptions);
           } catch {
             /* next alarm retries */
           }

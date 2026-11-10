@@ -4,7 +4,7 @@ import { shouldAcceptBundle } from '@/lib/config/freshness';
 import { configItem, saveBundle } from '@/lib/config/store';
 import type { ConfigBundle } from '@/lib/config/types';
 import { validateBundle } from '@/lib/config/validate';
-import { verifyBundle } from '@/lib/config/verify';
+import { verifySigned } from '@/lib/config/verify';
 import { siError } from '@/lib/debug';
 import { getActiveEntitlement } from '@/lib/entitlement';
 import { getClerkToken } from './entitlementBackground';
@@ -13,6 +13,15 @@ export interface SyncResult {
   status: 'updated' | 'unchanged' | 'error';
   version?: number;
   error?: string;
+}
+
+export interface SyncOptions {
+  /**
+   * Replace the stored bundle even at the same catalogue version. Used once
+   * after an extension update, so the active bundle is one this build verified
+   * itself rather than one an earlier build accepted.
+   */
+  force?: boolean;
 }
 
 /**
@@ -39,9 +48,9 @@ async function authHeaders(): Promise<{
   }
 }
 
-export async function syncConfig(): Promise<SyncResult> {
+export async function syncConfig(options: SyncOptions = {}): Promise<SyncResult> {
   const request = ++syncRevision;
-  const result = await syncConfigRequest(request);
+  const result = await syncConfigRequest(request, options);
   if (request === syncRevision) {
     await browser.storage.local
       .set({
@@ -52,23 +61,32 @@ export async function syncConfig(): Promise<SyncResult> {
   return result;
 }
 
-async function syncConfigRequest(request: number): Promise<SyncResult> {
+async function syncConfigRequest(request: number, options: SyncOptions): Promise<SyncResult> {
   try {
     const expectedOrg = (await getActiveEntitlement()).org?.id ?? null;
     const { headers, authenticated } = await authHeaders();
-    const { bundle, signature } = await getJson<{ bundle: unknown; signature: string | null }>(
+    const response = await getJson<{ bundle?: unknown; signatures?: unknown; payload?: unknown }>(
       '/v1/config',
       headers,
     );
-    if (!validateBundle(bundle)) return { status: 'error', error: 'invalid bundle' };
-
-    const incoming = bundle as ConfigBundle;
+    // `payload` is the exact string the Worker signed. Only those bytes are
+    // interpreted; the duplicate `bundle` object is never read.
+    const payload =
+      typeof response.payload === 'string' ? response.payload : JSON.stringify(response.bundle);
     // Signature check gates EVERYTHING in the bundle, policy included: an
     // unverified bundle is never persisted, so a forged team policy can never
     // reach the guard. This is the only writer of the active bundle.
-    if (!(await verifyBundle(JSON.stringify(incoming), signature))) {
+    if (!(await verifySigned('config', payload, response.signatures))) {
       return { status: 'error', error: 'signature verification failed' };
     }
+    let bundle: unknown;
+    try {
+      bundle = JSON.parse(payload);
+    } catch {
+      return { status: 'error', error: 'invalid bundle' };
+    }
+    if (!validateBundle(bundle)) return { status: 'error', error: 'invalid bundle' };
+    const incoming = bundle as ConfigBundle;
 
     const currentOrg = (await getActiveEntitlement()).org?.id ?? null;
     if (currentOrg !== expectedOrg || (incoming.policy?.orgId ?? null) !== expectedOrg) {
@@ -76,7 +94,8 @@ async function syncConfigRequest(request: number): Promise<SyncResult> {
     }
     const current = await configItem.getValue();
     if (request !== syncRevision) return { status: 'unchanged', version: current?.version };
-    if (!shouldAcceptBundle(current, incoming, authenticated)) {
+    const sameVersion = current !== null && current.version === incoming.version;
+    if (!shouldAcceptBundle(current, incoming, authenticated) && !(options.force && sameVersion)) {
       return { status: 'unchanged', version: current?.version };
     }
     await saveBundle(incoming);

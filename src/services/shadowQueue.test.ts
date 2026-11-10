@@ -6,7 +6,10 @@ import { sendShadowEvents } from '@/lib/shadow/api';
 import { getClerkToken } from './entitlementBackground';
 import { flushShadow, recordShadow, SHADOW_STATE_KEY } from './shadowBackground';
 
-vi.mock('@/lib/config/verify', () => ({ verifyBundle: vi.fn(async () => true) }));
+vi.mock('@/lib/config/verify', () => ({
+  verifySigned: vi.fn(async () => true),
+  signatureMap: (value: unknown) => (value && typeof value === 'object' ? value : null),
+}));
 vi.mock('./entitlementBackground', () => ({ getClerkToken: vi.fn() }));
 vi.mock('@/lib/shadow/api', () => ({
   sendShadowEvents: vi.fn(),
@@ -31,7 +34,11 @@ async function account(user = 'user_a', org = 'org_a') {
     issuedAt: 0,
     exp: 9_999_999_999,
   };
-  await entitlementItem.setValue({ blob, signature: 'valid', payload: JSON.stringify(blob) });
+  await entitlementItem.setValue({
+    blob,
+    signatures: { 'entitlement-2026-11': 'valid' },
+    payload: JSON.stringify(blob),
+  });
   vi.mocked(getClerkToken).mockResolvedValue(
     `e30.${btoa(JSON.stringify({ sub: user, org_id: org }))}.signature`,
   );

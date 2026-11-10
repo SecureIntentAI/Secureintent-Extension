@@ -1,4 +1,4 @@
-import { verifyBundle } from '@/lib/config/verify';
+import { verifySigned } from '@/lib/config/verify';
 import { entitlementItem } from './store';
 import {
   type ActiveEntitlement,
@@ -90,7 +90,7 @@ export async function evaluateStored(
   // re-stringify only for values cached before `payload` was stored.
   try {
     const payload = stored.payload ?? JSON.stringify(stored.blob);
-    const valid = await verifyBundle(payload, stored.signature);
+    const valid = await verifySigned('entitlement', payload, stored.signatures);
     // Only interpret bytes authenticated by the signature, never the duplicate blob.
     return evaluateBlob(JSON.parse(payload), nowSec, valid, expectedUserId);
   } catch {

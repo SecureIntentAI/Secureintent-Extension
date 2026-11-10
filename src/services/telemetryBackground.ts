@@ -1,7 +1,7 @@
 import { browser } from '#imports';
 import { API_BASE } from '@/lib/api/client';
 import { abortable, withDeadline } from '@/lib/async';
-import { verifyBundle } from '@/lib/config/verify';
+import { verifySigned } from '@/lib/config/verify';
 import { isConsentAccepted } from '@/lib/consent';
 import { entitlementItem } from '@/lib/entitlement';
 import type { TelemetryDetection, TelemetryEvent } from '@/lib/telemetry/types';
@@ -69,7 +69,7 @@ async function currentOwner(): Promise<TelemetryOwner | null> {
   if (!stored) return null;
   try {
     const payload = stored.payload ?? JSON.stringify(stored.blob);
-    if (!(await verifyBundle(payload, stored.signature))) return null;
+    if (!(await verifySigned('entitlement', payload, stored.signatures))) return null;
     const signed = JSON.parse(payload);
     return ownerValue({ userId: signed.clerkUserId, orgId: signed.org?.id ?? null });
   } catch {

@@ -78,7 +78,7 @@ const renewEntitlement = () =>
       issuedAt: Date.now() / 1000,
       exp: Date.now() / 1000 + 900,
     },
-    signature: 'test-renewal',
+    signatures: { 'entitlement-2026-11': 'test-renewal' },
   });
 
 test('minute entitlement renewals preserve the idle deadline and existing unlock callback', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import { browser } from '#imports';
 import { DEFAULT_BUNDLE } from '@/lib/config/default';
@@ -20,22 +20,39 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const PRIV = 'MC4CAQAwBQYDK2VwBCIEIDil5s2qLmnKUY2O5xpX+QTAWz58ZgCXmw6jxnzmxlBm';
+// A signing key generated for this run; its public half stands in for the
+// trusted keys (both purposes) through the build-time override.
+let signingKey: CryptoKey;
+beforeAll(async () => {
+  const pair = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, [
+    'sign',
+    'verify',
+  ])) as CryptoKeyPair;
+  signingKey = pair.privateKey;
+  const raw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
+  vi.stubEnv('WXT_POLICY_PUBLIC_KEY', btoa(String.fromCharCode(...raw)));
+});
+afterAll(() => vi.unstubAllEnvs());
+
 async function sign(bundle: unknown): Promise<string> {
-  const priv = Uint8Array.from(atob(PRIV), (c) => c.charCodeAt(0));
-  const key = await crypto.subtle.importKey('pkcs8', priv, { name: 'Ed25519' }, false, ['sign']);
   const sig = await crypto.subtle.sign(
     { name: 'Ed25519' },
-    key,
+    signingKey,
     new TextEncoder().encode(JSON.stringify(bundle)),
   );
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 
+/** The Worker's response: the bundle, its labelled signatures and the signed string. */
 function mockConfig(bundle: unknown, signature: string | null, status = 200) {
+  const body = {
+    bundle,
+    signatures: signature === null ? {} : { 'config-2026-11': signature },
+    payload: JSON.stringify(bundle),
+  };
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => new Response(JSON.stringify({ bundle, signature }), { status })),
+    vi.fn(async () => new Response(JSON.stringify(body), { status })),
   );
 }
 
@@ -221,7 +238,7 @@ describe('syncConfig — team policy', () => {
     await entitlementItem.setValue({
       blob: entitlement,
       payload: JSON.stringify(entitlement),
-      signature: await sign(entitlement),
+      signatures: { 'entitlement-2026-11': await sign(entitlement) },
     });
     await saveBundle({ ...DEFAULT_BUNDLE, version: 12 });
     const b = {
@@ -251,7 +268,10 @@ describe('syncConfig — team policy', () => {
       issuedAt: 0,
       exp: 9_999_999_999,
     };
-    await entitlementItem.setValue({ blob: entitlement, signature: await sign(entitlement) });
+    await entitlementItem.setValue({
+      blob: entitlement,
+      signatures: { 'entitlement-2026-11': await sign(entitlement) },
+    });
     const current = {
       ...DEFAULT_BUNDLE,
       policy: { ...TEAM_POLICY, orgId: 'org_acme' },

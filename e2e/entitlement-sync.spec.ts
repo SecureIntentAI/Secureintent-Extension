@@ -24,7 +24,7 @@ test('a Clerk session-storage change triggers a background entitlement refresh',
 
   // Seed a cached entitlement blob.
   await sw.evaluate(() =>
-    chrome.storage.local.set({ si_entitlement: { blob: { clerkUserId: 'u1' }, signature: 'x' } }),
+    chrome.storage.local.set({ si_entitlement: { blob: { clerkUserId: 'u1' }, signatures: { 'entitlement-2026-11': 'x' } } }),
   );
 
   // Simulate Clerk writing a session key (what happens on sign-in/out).

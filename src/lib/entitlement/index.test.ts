@@ -3,7 +3,12 @@ import { fakeBrowser } from 'wxt/testing';
 
 // Mock the Ed25519 verifier so tests don't need the private signing key.
 vi.mock('@/lib/config/verify', () => ({
-  verifyBundle: vi.fn(async (_payload: string, sig: string | null) => sig === 'valid'),
+  verifySigned: vi.fn(
+    async (_purpose: string, _payload: string, signatures: unknown) =>
+      (signatures as Record<string, string> | null)?.['entitlement-2026-11'] === 'valid',
+  ),
+  signatureMap: (value: unknown) =>
+    value && typeof value === 'object' ? (value as Record<string, string>) : null,
 }));
 
 import {
@@ -52,11 +57,18 @@ describe('evaluateBlob', () => {
   });
   test('reads the package and trial from a newer blob', () => {
     const e = evaluateBlob(
-      proBlob({ tier: 'desktop_pro', trial: { state: 'active', endsAt: 1_800_000_000 }, source: 'trial' }),
+      proBlob({
+        tier: 'desktop_pro',
+        trial: { state: 'active', endsAt: 1_800_000_000 },
+        source: 'trial',
+      }),
       1500,
       true,
     );
-    expect(e).toMatchObject({ tier: 'desktop_pro', trial: { state: 'active', endsAt: 1_800_000_000 } });
+    expect(e).toMatchObject({
+      tier: 'desktop_pro',
+      trial: { state: 'active', endsAt: 1_800_000_000 },
+    });
   });
   test('an older blob (plan only) maps to its package, with no trial', () => {
     expect(evaluateBlob(proBlob({ plan: 'business_pro' }), 1500, true)).toMatchObject({
@@ -119,7 +131,11 @@ describe('evaluateStored', () => {
   test('ignores unsigned edits to the duplicate blob', async () => {
     const signed = proBlob({ pro: false, features: [], plan: 'developer' });
     const out = await evaluateStored(
-      { blob: proBlob(), payload: JSON.stringify(signed), signature: 'valid' },
+      {
+        blob: proBlob(),
+        payload: JSON.stringify(signed),
+        signatures: { 'entitlement-2026-11': 'valid' },
+      },
       1500,
     );
     expect(out.pro).toBe(false);
@@ -127,9 +143,12 @@ describe('evaluateStored', () => {
   });
   test('rejects malformed signed payloads', async () => {
     for (const payload of ['null', '{}', 'invalid']) {
-      expect(await evaluateStored({ blob: proBlob(), payload, signature: 'valid' }, 1500)).toEqual(
-        FREE_ENTITLEMENT,
-      );
+      expect(
+        await evaluateStored(
+          { blob: proBlob(), payload, signatures: { 'entitlement-2026-11': 'valid' } },
+          1500,
+        ),
+      ).toEqual(FREE_ENTITLEMENT);
     }
   });
   test('null → free', async () => {
@@ -146,11 +165,17 @@ describe('evaluateStored', () => {
     });
   });
   test('valid signature unlocks', async () => {
-    const out = await evaluateStored({ blob: proBlob(), signature: 'valid' }, 1500);
+    const out = await evaluateStored(
+      { blob: proBlob(), signatures: { 'entitlement-2026-11': 'valid' } },
+      1500,
+    );
     expect(out.pro).toBe(true);
   });
   test('bad signature → free', async () => {
-    const out = await evaluateStored({ blob: proBlob(), signature: 'nope' }, 1500);
+    const out = await evaluateStored(
+      { blob: proBlob(), signatures: { 'entitlement-2026-11': 'nope' } },
+      1500,
+    );
     expect(out.pro).toBe(false);
   });
 });
@@ -161,12 +186,12 @@ describe('cache', () => {
     await entitlementItem.setValue({
       blob: { ...blob, clerkUserId: 'unsigned-edit' },
       payload: JSON.stringify(blob),
-      signature: 'valid',
+      signatures: { 'entitlement-2026-11': 'valid' },
     });
     const stop = await initEntitlementCache();
     try {
       expect(getEntitlementSnapshot().userId).toBe('user_1');
-      await entitlementItem.setValue({ blob, signature: 'nope' });
+      await entitlementItem.setValue({ blob, signatures: { 'entitlement-2026-11': 'nope' } });
       await vi.waitFor(() => expect(getEntitlementSnapshot().userId).toBeNull());
     } finally {
       stop();
@@ -174,7 +199,10 @@ describe('cache', () => {
   });
 
   test('initEntitlementCache primes hasFeatureCached and updates on change', async () => {
-    await entitlementItem.setValue({ blob: proBlob({ exp: 9_999_999_999 }), signature: 'valid' });
+    await entitlementItem.setValue({
+      blob: proBlob({ exp: 9_999_999_999 }),
+      signatures: { 'entitlement-2026-11': 'valid' },
+    });
     const stop = await initEntitlementCache();
     expect(hasFeatureCached('rehydrate')).toBe(true);
     expect(hasFeatureCached('session_lock')).toBe(true);
@@ -187,7 +215,10 @@ describe('cache', () => {
 
 describe('getActiveEntitlement', () => {
   test('reads from storage', async () => {
-    await entitlementItem.setValue({ blob: proBlob({ exp: 9_999_999_999 }), signature: 'valid' });
+    await entitlementItem.setValue({
+      blob: proBlob({ exp: 9_999_999_999 }),
+      signatures: { 'entitlement-2026-11': 'valid' },
+    });
     expect((await getActiveEntitlement()).pro).toBe(true);
   });
 });

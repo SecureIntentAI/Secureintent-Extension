@@ -142,10 +142,7 @@ export async function enforceEntitlementBinding(signal?: AbortSignal): Promise<b
   if (userId && stored.blob.clerkUserId !== userId) {
     const latest = await entitlementItem.getValue();
     signal?.throwIfAborted();
-    if (
-      latest?.signature !== stored.signature ||
-      latest?.blob.clerkUserId !== stored.blob.clerkUserId
-    )
+    if (latest?.payload !== stored.payload || latest?.blob.clerkUserId !== stored.blob.clerkUserId)
       return false;
     siDebug('entitlement', 'binding mismatch — clearing', { current: userId });
     await entitlementItem.setValue(null);

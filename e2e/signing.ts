@@ -16,7 +16,7 @@ export async function seedPro(context: BrowserContext) {
     pro: true, features: ['rehydrate', 'ghost', 'session_lock'], status: 'active',
     businessDomain: null, issuedAt: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 3600 };
   const payload = JSON.stringify(blob);
-  const stored = { blob, payload, signature: sign(null, Buffer.from(payload), key).toString('base64') };
+  const stored = { blob, payload, signatures: { 'entitlement-2026-11': sign(null, Buffer.from(payload), key).toString('base64') } };
   await context.serviceWorkers()[0].evaluate(async (value) => {
     const api = (globalThis as unknown as { chrome: { storage: { local: { set(value: unknown): Promise<void> } } } }).chrome;
     await api.storage.local.set({ si_entitlement: value });
