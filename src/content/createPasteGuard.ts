@@ -738,10 +738,13 @@ export async function createPasteGuard(
       }
       const text = readClipboardText(e.clipboardData);
       if (!text) return;
-      if (text.length > MAX_PASTE_CHARS) {
-        await status(intercept(), 'too-large');
-        return;
-      }
+      // A paste beyond the check limit is checked as far as the limit. The rest
+      // is never read: the person is told so, and only a plain paste or a
+      // cancel is offered for it, since anonymising the checked part and then
+      // pasting the unchecked part as is would look like a clean paste.
+      const checked = text.length > MAX_PASTE_CHARS ? text.slice(0, MAX_PASTE_CHARS) : text;
+      const partial =
+        checked.length < text.length ? { uncheckedChars: text.length - checked.length } : undefined;
       // Even a short paste can trigger a pathological team regex. No detector
       // runs on the page thread, and no raw default paste may beat the scan.
       const pending = intercept(); // MUST run before the first await
@@ -755,16 +758,16 @@ export async function createPasteGuard(
           })
           .catch(() => {});
       }
-      const ghostMode = text.length >= ghostMin;
+      const ghostMode = checked.length >= ghostMin;
       const tDetect = performance.now();
-      if (text.length >= ASYNC_PASTE_CHARS) {
+      if (checked.length >= ASYNC_PASTE_CHARS) {
         await status(pending, 'checking');
         if (!live(pending)) return;
       }
       // Avoid flashing a dialog for ordinary fast scans; slow/large work is
       // cancellable through the status and Escape throughout the operation.
       const checkingTimer =
-        text.length < ASYNC_PASTE_CHARS
+        checked.length < ASYNC_PASTE_CHARS
           ? setTimeout(() => {
               void status(pending, 'checking').catch((error) => failed(pending, error));
             }, 120)
@@ -774,7 +777,7 @@ export async function createPasteGuard(
       try {
         processor = await createPasteProcessor(pending.controller.signal);
         scan = await processor.request('scan', {
-          text,
+          text: checked,
           patterns: (ghostMode ? ghostPatterns : patterns).map(({ regex, ...pattern }) => ({
             ...pattern,
             source: regex.source,
@@ -827,6 +830,8 @@ export async function createPasteGuard(
         // Treat that as a sensitive paste under a destination's block rule.
         aiMode !== 'block_sensitive' &&
         scan.total === 0 &&
+        // The unchecked part of a partly checked paste is pasted as it is.
+        !partial &&
         hasFeatureCached('rehydrate') &&
         TOKEN_RE.test(text)
       ) {
@@ -875,6 +880,22 @@ export async function createPasteGuard(
       // would quietly break the promise the console makes to whoever set the
       // rule — and these are the sites a team has decided to feed nothing.
       if (scan.total === 0 && !destinationBlocked) {
+        if (partial) {
+          // Nothing found in the checked part; the rest was not read. Say so,
+          // and paste only when the person chooses to.
+          await present(pending, () =>
+            mountPasteStatus(
+              ctx,
+              'partly-checked',
+              () => finish(pending),
+              () =>
+                void act(pending, async () => {
+                  await insert(pending, text);
+                }),
+            ),
+          );
+          return;
+        }
         // Plain-text insertion only after a complete scan, preserving the
         // user's original selection even if focusing the site changes it.
         await act(pending, async () => {
@@ -974,6 +995,9 @@ export async function createPasteGuard(
               return;
             }
             if (action === 'rehydrate') return; // only the rehydrate overlay emits this
+            // A partly checked paste has no anonymise or sanitise route: the
+            // unchecked part would be pasted untouched behind a clean-looking result.
+            if (partial && action !== 'paste') return;
             // What actually happened, for team telemetry. Set only once an insert
             // really landed; a refused action is reported as cancelled. A paste
             // that fails part-way (worker, quota, insert error) sends nothing.
@@ -1094,6 +1118,7 @@ export async function createPasteGuard(
               ? { host: location.hostname, sensitiveOnly: sensitivePasteBlocked }
               : undefined,
             blockRawPaste: policy.blockInsteadOfWarn,
+            partial,
             onAction,
           }),
         );

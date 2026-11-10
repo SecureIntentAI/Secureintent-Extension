@@ -1,6 +1,15 @@
 import { type ContentScriptContext, createShadowRootUi } from '#imports';
 
-export type PasteStatus = 'checking' | 'too-large' | 'busy' | 'expired' | 'error';
+export type PasteStatus =
+  | 'checking'
+  | 'too-large'
+  | 'partly-checked'
+  | 'busy'
+  | 'expired'
+  | 'error';
+
+/** The most characters one paste or file is checked for; the rest is not read. */
+export const CHECK_LIMIT_LABEL = '2 million characters';
 
 const messages: Record<PasteStatus, [string, string]> = {
   error: [
@@ -17,8 +26,12 @@ const messages: Record<PasteStatus, [string, string]> = {
   ],
   checking: ['Checking paste…', 'You can cancel while SecureIntent checks this text.'],
   'too-large': [
-    'Paste is too large',
-    'Paste a smaller section, up to 2 million characters, so SecureIntent can check it safely.',
+    'Paste could not be queued',
+    `This paste arrived while another was being checked and is over ${CHECK_LIMIT_LABEL}, so it was not kept. Paste it again.`,
+  ],
+  'partly-checked': [
+    'Only part of this paste was checked',
+    `SecureIntent checks up to ${CHECK_LIMIT_LABEL}. Nothing was found in that part. The rest of the paste was not checked and may contain secrets.`,
   ],
 };
 
@@ -27,6 +40,8 @@ export async function mountPasteStatus(
   ctx: ContentScriptContext,
   initial: PasteStatus,
   onCancel: () => void,
+  /** When given, a second button pastes anyway; the first then cancels. */
+  onConfirm?: () => void,
 ) {
   const ui = await createShadowRootUi(ctx, {
     name: 'secureintent-paste-status',
@@ -52,8 +67,16 @@ export async function mountPasteStatus(
       button.type = 'button';
       button.addEventListener('click', onCancel);
       [title.textContent, description.textContent] = messages[initial];
-      button.textContent = initial === 'checking' ? 'Cancel' : 'Dismiss';
+      button.textContent = initial === 'checking' || onConfirm ? 'Cancel' : 'Dismiss';
       panel.append(title, description, button);
+      if (onConfirm) {
+        const confirm = document.createElement('button');
+        confirm.className = 'si-btn si-btn-danger';
+        confirm.type = 'button';
+        confirm.textContent = 'Paste anyway';
+        confirm.addEventListener('click', onConfirm);
+        panel.append(confirm);
+      }
       scrim.append(panel);
       container.append(scrim);
     },

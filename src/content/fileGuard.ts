@@ -14,6 +14,7 @@ import { createPasteProcessor } from '@/lib/paste/client';
 import { MAX_PASTE_CHARS } from '@/lib/paste/protocol';
 import { recognizeAiPage } from '@/lib/shadow/catalog';
 import { mountConsentGate } from '@/overlay/mountConsentGate';
+import { CHECK_LIMIT_LABEL } from '@/overlay/mountPasteStatus';
 import { enabledItem, isEnabled } from '@/settings';
 
 const MAX_FILE_BYTES = 4_000_000;
@@ -33,6 +34,9 @@ function textFile(file: File): boolean {
 }
 
 type Check = { kind: 'clean' | 'warning' | 'blocked' | 'error'; count: number; message: string };
+
+/** The most characters of one file that are checked; a longer file is checked this far. */
+export const FILE_CHECK_CHARS = MAX_PASTE_CHARS;
 
 /** FileReader lets cancellation stop the read, rather than only discard its result. */
 function readFileText(file: File, signal: AbortSignal): Promise<string> {
@@ -110,12 +114,14 @@ export async function checkFiles(
     flags: regex.flags,
   }));
   let count = 0;
+  let partlyChecked = 0;
   for (const file of candidates) {
     signal?.throwIfAborted();
-    const content = await (signal ? readFileText(file, signal) : file.text());
-    if (content.length > MAX_PASTE_CHARS) {
-      return { kind: 'error', count, message: 'A text file is too large to check safely.' };
-    }
+    const text = await (signal ? readFileText(file, signal) : file.text());
+    // A longer file is checked as far as the limit; the rest is not read, and
+    // the person is told so before the upload goes ahead.
+    const content = text.length > FILE_CHECK_CHARS ? text.slice(0, FILE_CHECK_CHARS) : text;
+    if (content.length < text.length) partlyChecked++;
     const controller = new AbortController();
     const cancel = () => controller.abort(signal?.reason);
     signal?.addEventListener('abort', cancel, { once: true });
@@ -136,18 +142,29 @@ export async function checkFiles(
       controller.abort();
     }
   }
-  if (count === 0) return { kind: 'clean', count, message: '' };
+  const partialNote =
+    partlyChecked === 0
+      ? ''
+      : ` Only the first ${CHECK_LIMIT_LABEL} of ${partlyChecked === 1 && candidates.length === 1 ? 'the file' : `${partlyChecked} file${partlyChecked === 1 ? '' : 's'}`} were checked; the rest was not read and may contain secrets.`;
+  if (count === 0) {
+    if (partlyChecked === 0) return { kind: 'clean', count, message: '' };
+    return {
+      kind: 'warning',
+      count,
+      message: `SecureIntent found nothing in the part it checked.${partialNote}`,
+    };
+  }
   if (policy.blockInsteadOfWarn || aiMode === 'block_sensitive') {
     return {
       kind: 'blocked',
       count,
-      message: `Your team blocks uploads containing sensitive information (${count} finding${count === 1 ? '' : 's'}).`,
+      message: `Your team blocks uploads containing sensitive information (${count} finding${count === 1 ? '' : 's'}).${partialNote}`,
     };
   }
   return {
     kind: 'warning',
     count,
-    message: `SecureIntent found ${count} possible secret${count === 1 ? '' : 's'} in the selected file${files.length === 1 ? '' : 's'}.`,
+    message: `SecureIntent found ${count} possible secret${count === 1 ? '' : 's'} in the selected file${files.length === 1 ? '' : 's'}.${partialNote}`,
   };
 }
 

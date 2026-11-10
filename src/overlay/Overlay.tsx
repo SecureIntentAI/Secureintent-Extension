@@ -7,6 +7,7 @@ import {
   type SecretLocation,
 } from '@/lib/detection';
 import { OFFLINE_LIMIT } from '@/lib/quota/offline';
+import { CHECK_LIMIT_LABEL } from './mountPasteStatus';
 
 export type OverlayAction = 'paste' | 'redact' | 'cancel' | 'sanitize' | 'upgrade' | 'rehydrate';
 
@@ -59,7 +60,25 @@ export interface OverlayProps {
    * anyway" so the raw text has no route in; anonymise and cancel remain.
    */
   blockRawPaste?: boolean;
+  /**
+   * The paste was longer than the check limit: only the first part was
+   * checked and these findings come from it. The rest is unread, so the
+   * anonymise and sanitise actions are not offered (they would paste the
+   * unchecked part as is); the choice is paste anyway or cancel.
+   */
+  partial?: { uncheckedChars: number };
   onAction: (action: OverlayAction) => void;
+}
+
+/** The note shown when only the first part of a paste was checked. */
+export function PartialNote({ uncheckedChars }: { uncheckedChars: number }) {
+  return (
+    <p className="si-policy-note">
+      Only the first {CHECK_LIMIT_LABEL} were checked; the findings above are from that part. The
+      remaining {uncheckedChars.toLocaleString('en-GB')} characters were not checked and may hold
+      more.
+    </p>
+  );
 }
 
 export function Overlay({
@@ -75,6 +94,7 @@ export function Overlay({
   signInRequired = false,
   policyBlock,
   blockRawPaste = false,
+  partial,
   onAction,
 }: OverlayProps) {
   const [expanded, setExpanded] = useState<number | null>(null);
@@ -110,6 +130,7 @@ export function Overlay({
         summary={summary}
         pro={pro}
         blockRawPaste={blockRawPaste}
+        partial={partial}
         onAction={onAction}
       />
     );
@@ -198,6 +219,8 @@ export function Overlay({
           </p>
         )}
 
+        {partial && <PartialNote uncheckedChars={partial.uncheckedChars} />}
+
         {!pro && signInRequired && (
           <p className="si-quota-note">
             Sign in to use Anonymise &amp; Paste. A free account includes {OFFLINE_LIMIT} a month.
@@ -224,7 +247,7 @@ export function Overlay({
               Paste anyway
             </button>
           )}
-          {pro ? (
+          {partial ? null : pro ? (
             <button type="button" className="si-btn si-btn-mint" onClick={() => onAction('redact')}>
               Paste anonymously
             </button>
@@ -387,12 +410,14 @@ function GhostSummaryView({
   summary,
   pro,
   blockRawPaste,
+  partial,
   onAction,
 }: {
   site: string;
   summary: GhostSummary;
   pro: boolean;
   blockRawPaste: boolean;
+  partial?: { uncheckedChars: number };
   onAction: (action: OverlayAction) => void;
 }) {
   return (
@@ -460,6 +485,8 @@ function GhostSummaryView({
           </p>
         )}
 
+        {partial && <PartialNote uncheckedChars={partial.uncheckedChars} />}
+
         <div className="si-actions">
           <button type="button" className="si-btn si-btn-ghost" onClick={() => onAction('cancel')}>
             Cancel
@@ -473,7 +500,7 @@ function GhostSummaryView({
               Paste anyway
             </button>
           )}
-          {pro ? (
+          {partial ? null : pro ? (
             <button
               type="button"
               className="si-btn si-btn-mint"

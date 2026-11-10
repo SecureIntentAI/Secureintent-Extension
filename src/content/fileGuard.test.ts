@@ -10,7 +10,7 @@ import { createPasteComputation } from '@/lib/paste/process';
 import type { PasteCommand, PasteOperations, PasteProcessor } from '@/lib/paste/protocol';
 import { mountConsentGate } from '@/overlay/mountConsentGate';
 import { enabledItem, isEnabled } from '@/settings';
-import { checkFiles, installFileGuard } from './fileGuard';
+import { checkFiles, FILE_CHECK_CHARS, installFileGuard } from './fileGuard';
 
 vi.mock('@/lib/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/config')>();
@@ -498,4 +498,23 @@ test('bounds pending text bytes across separate file inputs', async () => {
   expect(document.querySelector('secureintent-file-check')).not.toBeNull();
   expect(excess.files).toHaveLength(0);
   expect(createPasteProcessor).toHaveBeenCalledOnce();
+});
+
+test('a long file is checked as far as the limit and the upload asks before going on', async () => {
+  const secret = 'sk-abcdefghijklmnopqrstuvwxyz012345';
+  const head = `${secret}\n${'x '.repeat(FILE_CHECK_CHARS / 2)}`;
+  const upload = file('big.log', `${head}\nsk-zzzzzzzzzzzzzzzzzzzzzzzzzz012345`);
+  Object.defineProperty(upload, 'size', { value: 3_000_000 });
+  const result = await checkFiles([upload], 'chatgpt.com');
+  expect(result).toMatchObject({ kind: 'warning', count: 1 });
+  expect(result.message).toContain('Only the first 2 million characters of the file were checked');
+});
+
+test('a long file with nothing in the checked part still asks before uploading', async () => {
+  const upload = file('big.log', `${'x '.repeat(FILE_CHECK_CHARS / 2)}tail-not-checked`);
+  Object.defineProperty(upload, 'size', { value: 3_000_000 });
+  const result = await checkFiles([upload], 'chatgpt.com');
+  expect(result).toMatchObject({ kind: 'warning', count: 0 });
+  expect(result.message).toContain('found nothing in the part it checked');
+  expect(result.message).toContain('the rest was not read');
 });

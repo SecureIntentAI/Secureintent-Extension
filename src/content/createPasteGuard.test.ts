@@ -638,19 +638,72 @@ describe('createPasteGuard', () => {
     expect(synthetic.preventDefault).not.toHaveBeenCalled();
   });
 
-  test('oversized pastes are blocked with an explanation and can be dismissed', async () => {
+  test('an oversized clean paste is checked as far as the limit and pasted only on request', async () => {
     const t = setup();
     await t.start();
-    const e = t.makeEvent('x'.repeat(MAX_PASTE_CHARS + 1));
+    const text = `${'x '.repeat(MAX_PASTE_CHARS / 2)}tail`;
+    const e = t.makeEvent(text);
     await t.firePaste(e);
     expect(e.preventDefault).toHaveBeenCalled();
-    expect(mountPasteStatusMock.mock.calls.at(-1)![1]).toBe('too-large');
     expect(mountOverlayMock).not.toHaveBeenCalled();
+    const notice = mountPasteStatusMock.mock.calls.at(-1)!;
+    expect(notice[1]).toBe('partly-checked');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    // "Paste anyway" inserts the whole text, unchecked tail included.
+    notice[3]();
+    await vi.waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('insertText', false, text),
+    );
+    const clean = t.makeEvent('ordinary text');
+    await t.firePaste(clean);
+    await vi.waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('insertText', false, 'ordinary text'),
+    );
+  });
+
+  test('an oversized clean paste can be cancelled from the notice', async () => {
+    const t = setup();
+    await t.start();
+    const e = t.makeEvent(`${'x '.repeat(MAX_PASTE_CHARS / 2)}tail`);
+    await t.firePaste(e);
+    expect(mountPasteStatusMock.mock.calls.at(-1)![1]).toBe('partly-checked');
     mountPasteStatusMock.mock.calls.at(-1)![2]();
     const clean = t.makeEvent('ordinary text');
     await t.firePaste(clean);
-    expect(clean.preventDefault).toHaveBeenCalled();
+    expect(document.execCommand).toHaveBeenCalledTimes(1);
     expect(document.execCommand).toHaveBeenCalledWith('insertText', false, 'ordinary text');
+  });
+
+  test('a secret in the checked part of an oversized paste warns, with paste anyway only', async () => {
+    const t = setup();
+    await t.start();
+    const text = `${SECRET} ${'x '.repeat(MAX_PASTE_CHARS / 2)}tail`;
+    await t.firePaste(t.makeEvent(text));
+    await vi.waitFor(() => expect(mountOverlayMock).toHaveBeenCalled());
+    const props = mountOverlayMock.mock.calls.at(-1)![1];
+    expect(props.partial).toEqual({ uncheckedChars: text.length - MAX_PASTE_CHARS });
+    expect(props.findingCount).toBeGreaterThanOrEqual(1);
+    await lastOnAction()('paste');
+    await vi.waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('insertText', false, text),
+    );
+  });
+
+  test('an anonymise action on a partly checked paste drops it instead', async () => {
+    const t = setup();
+    await t.start();
+    const text = `${SECRET} ${'x '.repeat(MAX_PASTE_CHARS / 2)}tail`;
+    await t.firePaste(t.makeEvent(text));
+    await vi.waitFor(() => expect(mountOverlayMock).toHaveBeenCalled());
+    // The overlay offers no such button; a driven action is refused, not run.
+    await lastOnAction()('redact');
+    expect(document.execCommand).not.toHaveBeenCalled();
+    // The paste is over: the next one is handled afresh.
+    await t.firePaste(t.makeEvent('ordinary text'));
+    await vi.waitFor(() =>
+      expect(document.execCommand).toHaveBeenCalledWith('insertText', false, 'ordinary text'),
+    );
+    expect(document.execCommand).toHaveBeenCalledTimes(1);
   });
 
   test('cancelling a status while it mounts removes the late UI and never inserts', async () => {

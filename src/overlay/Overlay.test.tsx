@@ -374,4 +374,42 @@ describe('Overlay', () => {
     expect(container.querySelector('.si-snippet')).toBeTruthy();
     expect(screen.getByRole('alertdialog').textContent).not.toContain(secret);
   });
+
+  test('a partly checked paste says so and offers only paste anyway or cancel', () => {
+    const onAction = vi.fn();
+    render(
+      <Overlay
+        site="ChatGPT"
+        text={text}
+        detections={detections}
+        pro
+        partial={{ uncheckedChars: 1234 }}
+        onAction={onAction}
+      />,
+    );
+    expect(screen.getByText(/Only the first 2 million characters were checked/)).toBeTruthy();
+    expect(screen.getByText(/1,234 characters were not checked/)).toBeTruthy();
+    expect(screen.queryByText('Paste anonymously')).toBeNull();
+    expect(screen.queryByText(/Pro/)).toBeNull();
+    fireEvent.click(screen.getByText('Paste anyway'));
+    expect(onAction).toHaveBeenCalledWith('paste');
+  });
+
+  test('a partly checked large paste keeps the summary but drops the sanitise action', () => {
+    render(
+      <Overlay
+        site="ChatGPT"
+        text={text}
+        detections={detections}
+        summary={{ total: 1, items: [{ label: 'Internal IP', count: 1 }] }}
+        pro
+        partial={{ uncheckedChars: 5 }}
+        onAction={() => {}}
+      />,
+    );
+    expect(screen.getByText(/Internal IP/)).toBeTruthy();
+    expect(screen.getByText(/were not checked/)).toBeTruthy();
+    expect(screen.queryByText('Sanitize & paste')).toBeNull();
+    expect(screen.getByText('Paste anyway')).toBeTruthy();
+  });
 });
