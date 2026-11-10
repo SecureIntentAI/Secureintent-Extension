@@ -1,11 +1,18 @@
 import { browser, defineBackground } from '#imports';
 import { bumpBadge, clearBadge } from '@/lib/badge';
-import { desktopConnected, queryAllowed, sendBrowserUrl, sendHandled } from '@/lib/bridge/client';
+import {
+  desktopConnected,
+  mayReportBrowserUrl,
+  queryAllowed,
+  sendBrowserUrl,
+  sendHandled,
+} from '@/lib/bridge/client';
 import { pairingToken } from '@/lib/bridge/pairing';
 import { browserAction } from '@/lib/browserAction';
 import { ACCOUNT_URL, IS_FIREFOX } from '@/lib/clerkConfig';
 import { consentItem, isConsentAccepted, PRIVACY_URL, TOS_URL } from '@/lib/consent';
 import { getActiveEntitlement } from '@/lib/entitlement';
+import { LOCK_UNLOCK_MESSAGE } from '@/lib/lock/attempts';
 import { PASTE_READY } from '@/lib/paste/protocol';
 import { offlineConsume } from '@/lib/quota/offline';
 import { SHADOW_DEMO } from '@/lib/shadow/demoConfig';
@@ -30,6 +37,7 @@ import {
   SHADOW_POLICY_SYNC_ALARM,
   SYNC_ALARM,
 } from '@/services/scheduler';
+import { installSessionLockBackground } from '@/services/sessionLockBackground';
 import { flushShadow, installShadowBackground, recordShadow } from '@/services/shadowBackground';
 import { installShadowDemo, recordDemoShadow } from '@/services/shadowDemoBackground';
 import {
@@ -56,6 +64,7 @@ async function updateConsentBadge() {
 export default defineBackground(() => {
   installPasteWorkerBackground();
   installVaultBackground();
+  installSessionLockBackground();
   if (SHADOW_DEMO) installShadowDemo();
   else installShadowBackground();
   // First install → open the welcome/consent page. Any startup → refresh the
@@ -172,7 +181,12 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = (msg as { type?: string })?.type;
     if (type === 'si-policy-receipt') return false;
-    if (type === 'si-vault-put' || type === 'si-vault-read' || type === 'si-shadow-demo')
+    if (
+      type === 'si-vault-put' ||
+      type === 'si-vault-read' ||
+      type === 'si-shadow-demo' ||
+      type === LOCK_UNLOCK_MESSAGE
+    )
       return false;
     if (type === 'si-telemetry' && sender.tab && !sender.tab.incognito) {
       void sendAuthenticatedTelemetry(msg, sender.url)
@@ -220,11 +234,13 @@ export default defineBackground(() => {
       return false;
     }
     // A content script says where its focused tab is. Pass it to the desktop
-    // agent so it can tell a local dev server from a real destination. Nothing
+    // agent so it can tell a local dev server from a real destination. Private
+    // windows are never reported. Nothing
     // waits on the answer: the bridge is an optimisation, and a machine with no
     // agent on it is the normal case rather than a fault. With no desktop app to
     // pair with, `send` opens nothing.
     if (type === 'si-bridge-url') {
+      if (!mayReportBrowserUrl(sender)) return false;
       const { host, port, scheme } = msg as {
         host?: string;
         port?: number | null;

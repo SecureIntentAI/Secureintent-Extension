@@ -131,7 +131,7 @@ export function SessionLock({ onUnlock, setupRequired, onSetup }: SessionLockPro
 
             <p className="si-lock-error" role="alert">
               {error
-                ? 'Incorrect PIN or too many attempts. After five attempts, wait 30 seconds.'
+                ? 'Incorrect PIN or too many attempts. After five attempts, each wrong PIN adds a longer wait.'
                 : ''}
             </p>
           </>

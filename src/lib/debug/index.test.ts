@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { elapsedMs, siDebug, siError } from './index';
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe('siDebug', () => {
   test('formats as "[SecureIntent] <site> · <event>" with data', () => {
@@ -14,6 +17,13 @@ describe('siDebug', () => {
     const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
     siDebug('Gemini', 'guard active');
     expect(spy).toHaveBeenCalledWith('[SecureIntent] Gemini · guard active');
+  });
+
+  test('writes nothing outside a development build', () => {
+    vi.stubEnv('DEV', false);
+    const spy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    siDebug('Claude', 'paste blocked', { secrets: 2 });
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

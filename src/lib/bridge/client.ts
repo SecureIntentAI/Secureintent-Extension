@@ -196,6 +196,18 @@ async function send(frame: (token: string) => Promise<string>): Promise<boolean>
 }
 
 /**
+ * Only a regular (non-private) tab's top frame says where the person is. A
+ * private window's addresses stay in the browser and never reach the desktop
+ * app; neither does a message that did not come from a tab.
+ */
+export function mayReportBrowserUrl(sender: {
+  tab?: { incognito?: boolean };
+  frameId?: number;
+}): boolean {
+  return Boolean(sender.tab) && sender.tab?.incognito === false && sender.frameId === 0;
+}
+
+/**
  * Report where the focused tab is, so the desktop can recognise a local dev
  * server and not alert on a copy destined for one.
  *

@@ -12,6 +12,11 @@ import { SessionLockSettings } from './SessionLockSettings';
 // Session Lock is Pro-gated. Mock the entitlement check so we can drive both the
 // entitled (Pro) and unentitled (free) states deterministically.
 vi.mock('@/lib/entitlement', () => ({ hasFeature: vi.fn() }));
+// The background owns the PIN check; route the message straight to it.
+vi.mock('@/lib/lock/client', async () => {
+  const { tryUnlock } = await import('@/services/sessionLockBackground');
+  return { requestUnlock: (pin: string) => tryUnlock(pin) };
+});
 
 // Must match the component's store exactly so getOrCreateSalt yields the same salt.
 const store: KeyValueStore = {

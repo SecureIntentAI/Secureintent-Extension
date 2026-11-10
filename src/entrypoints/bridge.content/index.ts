@@ -1,4 +1,4 @@
-import { defineContentScript } from '#imports';
+import { browser, defineContentScript } from '#imports';
 import { bridgeAvailableItem } from '@/settings';
 
 // Tells the background worker which host the focused tab is on, so it can pass
@@ -26,6 +26,9 @@ export default defineContentScript({
     const page = window as unknown as Record<string, boolean>;
     if (page.__secureintentBridge) return;
     page.__secureintentBridge = true;
+    // A private window's addresses are not shared with the desktop app. The
+    // background checks this too; stopping here also skips the listeners.
+    if (browser.extension?.inIncognitoContext) return;
     // Whether a desktop app answered the last pairing lookup. With none on the
     // machine there is nobody to tell, so the tab is not reported at all.
     let enabled = false;

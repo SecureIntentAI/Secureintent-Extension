@@ -16,6 +16,7 @@ import { recognizeAiPage } from '@/lib/shadow/catalog';
 import { mountConsentGate } from '@/overlay/mountConsentGate';
 import { CHECK_LIMIT_LABEL } from '@/overlay/mountPasteStatus';
 import { enabledItem, isEnabled } from '@/settings';
+import { frameHostname, keepListening } from './frame';
 
 const MAX_FILE_BYTES = 4_000_000;
 const MAX_TOTAL_BYTES = 8_000_000;
@@ -387,7 +388,7 @@ export function installFileGuard(ctx: ContentScriptContext): void {
       signal.throwIfAborted();
       let result: Check;
       try {
-        result = await checkFiles(files, location.hostname, location.pathname, signal);
+        result = await checkFiles(files, frameHostname(), location.pathname, signal);
       } catch {
         signal.throwIfAborted();
         result = {
@@ -526,13 +527,15 @@ export function installFileGuard(ctx: ContentScriptContext): void {
       changed();
     }
   };
-  window.addEventListener('input', onChange, true);
-  window.addEventListener('change', onChange, true);
-  window.addEventListener('drop', onDrop, true);
-  window.addEventListener('pagehide', changed);
-  window.addEventListener('popstate', changed);
-  window.addEventListener('hashchange', changed);
-  window.addEventListener('keydown', onKeyDown, true);
+  keepListening(ctx, () => {
+    window.addEventListener('input', onChange, true);
+    window.addEventListener('change', onChange, true);
+    window.addEventListener('drop', onDrop, true);
+    window.addEventListener('pagehide', changed);
+    window.addEventListener('popstate', changed);
+    window.addEventListener('hashchange', changed);
+    window.addEventListener('keydown', onKeyDown, true);
+  });
   ctx.onInvalidated(() => {
     disposed = true;
     changed();
