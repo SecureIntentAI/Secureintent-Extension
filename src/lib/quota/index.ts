@@ -1,4 +1,5 @@
 import { browser } from '#imports';
+import { getActiveBundle } from '@/lib/config/store';
 import type { EntitlementSnapshot } from '@/lib/entitlement';
 import { OFFLINE_LIMIT, offlineUsed } from './offline';
 
@@ -9,12 +10,19 @@ export interface QuotaStatus {
   remaining: number; // -1 when unlimited
   limit: number;
   unlimited: boolean;
+  /** Signed out after launch: Anonymise needs an account (its 10 a month are per account). */
+  signInRequired?: boolean;
 }
 
 const FREE_LIMIT = OFFLINE_LIMIT;
 
 function unlimited(): QuotaStatus {
   return { used: 0, remaining: -1, limit: FREE_LIMIT, unlimited: true };
+}
+
+/** From launch (signed config `plansEnforced`), Anonymise & Paste needs sign-in. */
+export async function anonymiseNeedsSignIn(): Promise<boolean> {
+  return (await getActiveBundle().catch(() => null))?.plansEnforced === true;
 }
 
 async function offlineStatus(): Promise<QuotaStatus> {
@@ -24,11 +32,15 @@ async function offlineStatus(): Promise<QuotaStatus> {
 
 /**
  * Current Anonymise & Paste allowance, routed by state:
- * Pro → unlimited; signed-in → backend (per-account); else → obfuscated on-device.
+ * Pro → unlimited; signed-in → backend (per-account); signed out → sign-in
+ * required from launch, before it the obfuscated on-device count.
  * Falls back to the on-device count if the backend is unreachable.
  */
 export async function getAnonymizeStatus(snap: EntitlementSnapshot): Promise<QuotaStatus> {
   if (snap.pro) return unlimited();
+  if (!snap.signedIn && (await anonymiseNeedsSignIn())) {
+    return { used: 0, remaining: 0, limit: FREE_LIMIT, unlimited: false, signInRequired: true };
+  }
   if (snap.signedIn) {
     const r = (await browser.runtime
       .sendMessage({ type: 'si-quota-status' })

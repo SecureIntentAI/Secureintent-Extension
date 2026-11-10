@@ -959,8 +959,9 @@ export async function createPasteGuard(
         // "Spent your free allowance" is a different situation from "never had
         // this feature", so the overlay is told which one it is: a user at 0/10
         // needs the reset date, not a plain Pro badge.
+        const signInRequired = !ghostMode && Boolean(quota?.signInRequired);
         const quotaExhausted =
-          quota && !quota.unlimited && quota.remaining <= 0
+          quota && !quota.unlimited && !quota.signInRequired && quota.remaining <= 0
             ? { limit: quota.limit, resetsOn: formatQuotaReset() }
             : undefined;
 
@@ -1086,6 +1087,7 @@ export async function createPasteGuard(
             locations: scan.locations,
             pro: proAction,
             quotaExhausted,
+            signInRequired,
             // Team policy: a blocked destination gets the notice view (no paste
             // route at all); blockInsteadOfWarn just drops "Paste anyway".
             policyBlock: destinationBlocked

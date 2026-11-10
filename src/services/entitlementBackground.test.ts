@@ -6,6 +6,7 @@ import { configItem } from '@/lib/config/store';
 import type { SignedEntitlement } from '@/lib/entitlement';
 import { entitlementItem } from '@/lib/entitlement/store';
 import {
+  consumeUsage,
   getClerkToken,
   invalidateEntitlementRefresh,
   refreshEntitlementBg,
@@ -169,4 +170,16 @@ test('direct token callers time out and can retry a stalled SDK', async () => {
   await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
   await pending;
   expect(await getClerkToken()).toContain('.');
+});
+
+test('signed out, an anonymised paste is refused from launch and left to the on-device count before it', async () => {
+  clientMock.mockResolvedValue({ session: null });
+  expect(await consumeUsage()).toBeNull();
+  await configItem.setValue({
+    ...DEFAULT_BUNDLE,
+    version: DEFAULT_BUNDLE.version + 1,
+    plansEnforced: true,
+  });
+  expect(await consumeUsage()).toEqual({ allowed: false });
+  expect(fetch).not.toHaveBeenCalled();
 });

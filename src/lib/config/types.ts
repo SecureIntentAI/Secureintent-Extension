@@ -72,4 +72,8 @@ export interface ConfigBundle {
   // Ghost Sanitizer tuning. minChars: pastes at least this large take the
   // aggressive expanded-detection path. Omitted → built-in GHOST_MIN_CHARS.
   ghost?: { minChars?: number };
+  // Launch day for the packages: from here Anonymise & Paste needs sign-in.
+  // Absent before launch. Read as `=== true`, never validated, so a stray
+  // value can't cost an install its bundle (and kill switch).
+  plansEnforced?: boolean;
 }

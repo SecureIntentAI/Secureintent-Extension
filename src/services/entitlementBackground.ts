@@ -12,6 +12,7 @@ import { configItem } from '@/lib/config/store';
 import { siDebug } from '@/lib/debug';
 import { entitlementItem, getActiveEntitlement } from '@/lib/entitlement';
 import { type RefreshResult, refreshEntitlement } from '@/lib/entitlement/refresh';
+import { anonymiseNeedsSignIn } from '@/lib/quota';
 import { offlineUsed } from '@/lib/quota/offline';
 import { getClerkTokenFromCookie, getClerkUserIdFromCookie } from './cookieToken';
 
@@ -177,12 +178,16 @@ export async function getUsageStatus(): Promise<unknown | null> {
   }
 }
 
-/** Consume one Anonymise & Paste for the signed-in user. */
+/**
+ * Consume one Anonymise & Paste for the signed-in user. Signed out it is
+ * refused from launch; before launch (and when the Worker is unreachable) null
+ * hands it to the on-device count.
+ */
 export async function consumeUsage(): Promise<unknown | null> {
   try {
     return await withDeadline(async (signal) => {
       const token = await abortable(getClerkToken(), signal);
-      if (!token) return null;
+      if (!token) return (await anonymiseNeedsSignIn()) ? { allowed: false } : null;
       const res = await fetch(`${API_BASE}/v1/usage/anonymize`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },

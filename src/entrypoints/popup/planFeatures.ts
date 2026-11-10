@@ -128,6 +128,15 @@ function anonymiseRow(quota: QuotaStatus, nowMs: number): FeatureRow {
       note: ANON_NOTE,
     };
   }
+  if (quota.signInRequired) {
+    return {
+      key: 'anonymise',
+      label: ANON_LABEL,
+      state: 'locked',
+      detail: 'Sign in',
+      note: `Sign in to use it. A free account includes ${quota.limit} anonymised pastes a month.`,
+    };
+  }
   if (quota.remaining <= 0) {
     // Spent. Say so plainly and say when it comes back — the quota runs on the
     // UTC calendar month (see src/lib/quota/reset.ts).
@@ -166,7 +175,15 @@ export function buildPlanView(input: {
   /** Injectable clock — the quota reset date is derived from it. */
   nowMs?: number;
 }): PlanView {
-  const { tier, pro, quota, trial = { state: 'none', endsAt: null }, org = null, teamRules = 0, nowMs = Date.now() } = input;
+  const {
+    tier,
+    pro,
+    quota,
+    trial = { state: 'none', endsAt: null },
+    org = null,
+    teamRules = 0,
+    nowMs = Date.now(),
+  } = input;
 
   const rows: FeatureRow[] = [
     {
