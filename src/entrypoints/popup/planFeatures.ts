@@ -24,18 +24,30 @@ export interface PlanOrgView {
 
 /** A running trial: how long is left, for the card to say. */
 export interface PlanTrialView {
+  /** "Browser Pro" or "Desktop Pro": the plan the trial is for. */
+  label: string;
   daysLeft: number;
   /** e.g. "3 Dec": the trial's last day, in the user's locale. */
   endsOn: string;
+  /** Share of the 30 days still left, 0..1, for the countdown bar. */
+  left: number;
+  /** The last 3 days: the countdown turns amber. */
+  endingSoon: boolean;
 }
 
 export interface PlanView {
   planLabel: string;
   isPro: boolean;
-  /** Set while the 30-day Desktop Pro trial is running. */
+  /** Set while the 30-day trial is running. */
   trial: PlanTrialView | null;
-  /** The account can still start its one trial: show Start trial. */
+  /** The account can still start its one trial here: show Start trial (Browser Pro). */
   canStartTrial: boolean;
+  /** Set once the trial is over and the account is back on Browser Free: its plan's name. */
+  trialEnded: string | null;
+  /** Show Upgrade: below Pro, or on a trial (buying ends it). Never for a team seat. */
+  showUpgrade: boolean;
+  /** The plan Upgrade opens on the account page. */
+  upgradePlan: Tier;
   /** Set when this plan is a team seat, so the card can say who provides it. */
   org: PlanOrgView | null;
   /**
@@ -56,14 +68,23 @@ export const TIER_LABEL: Record<Tier, string> = {
   business: 'Business',
 };
 
+const TRIAL_DAYS = 30;
+
+/** The trial's plan; one from before the Worker named it is Desktop Pro. */
+const trialProduct = (trial: TrialInfo): Tier => trial.product ?? 'desktop_pro';
+
 /** The trial's days left and last day, or null when it is not running. */
 function trialView(trial: TrialInfo, nowMs: number): PlanTrialView | null {
   if (trial.state !== 'active' || trial.endsAt === null) return null;
   const endsMs = trial.endsAt * 1000;
   if (endsMs <= nowMs) return null;
+  const daysLeft = Math.ceil((endsMs - nowMs) / DAY_MS);
   return {
-    daysLeft: Math.ceil((endsMs - nowMs) / DAY_MS),
+    label: TIER_LABEL[trialProduct(trial)],
+    daysLeft,
     endsOn: new Date(endsMs).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+    left: Math.min(1, Math.max(0, (endsMs - nowMs) / (TRIAL_DAYS * DAY_MS))),
+    endingSoon: daysLeft <= 3,
   };
 }
 
@@ -185,6 +206,7 @@ export function buildPlanView(input: {
     nowMs = Date.now(),
   } = input;
 
+  const running = trialView(trial, nowMs);
   const rows: FeatureRow[] = [
     {
       key: 'detection',
@@ -213,8 +235,16 @@ export function buildPlanView(input: {
     // Every Business seat is the Business package, admin or member alike.
     planLabel: TIER_LABEL[tier],
     isPro: pro,
-    trial: trialView(trial, nowMs),
-    canStartTrial: trial.state === 'available' && !org,
+    trial: running,
+    // The extension offers the Browser Pro trial only, and only when the Worker
+    // says it can still start (an older Worker sends no list: nothing offered).
+    canStartTrial:
+      trial.state === 'available' && !org && (trial.available ?? []).includes('browser_pro'),
+    trialEnded:
+      trial.state === 'used' && tier === 'free' && !org ? TIER_LABEL[trialProduct(trial)] : null,
+    showUpgrade: !org && (!pro || running !== null),
+    // A trial's own plan, so its Upgrade buys what they were trying; Browser Pro otherwise.
+    upgradePlan: running !== null || trial.state === 'used' ? trialProduct(trial) : 'browser_pro',
     org: org ? { name: org.name ?? 'your team', isAdmin: org.role === 'org:admin' } : null,
     // Clamped: a negative or fractional count could only come from a bug, and
     // the card renders this number to the user.

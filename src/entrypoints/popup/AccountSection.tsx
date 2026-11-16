@@ -361,7 +361,7 @@ function SignedOutBar() {
       </span>
       <span className="si-profile-lines">
         <span className="si-profile-email">Not signed in</span>
-        <span className="si-profile-plan">Sign in to unlock Pro</span>
+        <span className="si-profile-plan">Sign in to start your free trial</span>
       </span>
       <span className="si-profile-go" aria-hidden="true">
         <ChevronIcon />

@@ -191,13 +191,53 @@ describe('buildPlanView: the Desktop Pro trial', () => {
     }
   });
 
-  it('Start trial is offered only when the plan says the trial is available', () => {
-    const offer = (state: 'none' | 'available' | 'active' | 'used') =>
-      buildPlanView({ tier: 'free', pro: false, quota: usage(5), trial: { state, endsAt: null } })
-        .canStartTrial;
-    expect(offer('available')).toBe(true);
+  it('Start trial (Browser Pro) is offered only when the Worker says that trial can start', () => {
+    const offer = (
+      state: 'none' | 'available' | 'active' | 'used',
+      available?: Array<'browser_pro' | 'desktop_pro'>,
+    ) =>
+      buildPlanView({
+        tier: 'free',
+        pro: false,
+        quota: usage(5),
+        trial: { state, endsAt: null, available },
+      }).canStartTrial;
+    expect(offer('available', ['browser_pro', 'desktop_pro'])).toBe(true);
+    // Only the Desktop Pro trial left (e.g. Lifetime Browser Pro): not offered from the extension.
+    expect(offer('available', ['desktop_pro'])).toBe(false);
+    // An older Worker names no plans: nothing offered rather than a trial it would start as Desktop Pro.
+    expect(offer('available')).toBe(false);
     expect(offer('none')).toBe(false);
     expect(offer('used')).toBe(false);
+  });
+
+  it('a Browser Pro trial: named, counted down, amber in the last 3 days, Upgrade buys Browser Pro', () => {
+    const v = (days: number) =>
+      buildPlanView({
+        tier: 'browser_pro',
+        pro: true,
+        quota: unlimited,
+        trial: { state: 'active', endsAt: sec(NOW + days * 86_400_000), product: 'browser_pro' },
+        nowMs: NOW,
+      });
+    expect(v(23).trial).toMatchObject({ label: 'Browser Pro', daysLeft: 23, endingSoon: false });
+    expect(v(23).trial?.left).toBeCloseTo(23 / 30, 5);
+    expect(v(3).trial?.endingSoon).toBe(true);
+    expect(v(23).showUpgrade).toBe(true);
+    expect(v(23).upgradePlan).toBe('browser_pro');
+  });
+
+  it('after the trial: back on Browser Free, says it ended, Upgrade opens that plan', () => {
+    const v = buildPlanView({
+      tier: 'free',
+      pro: false,
+      quota: usage(5),
+      trial: { state: 'used', endsAt: sec(NOW - 86_400_000), product: 'browser_pro' },
+      nowMs: NOW,
+    });
+    expect(v.trialEnded).toBe('Browser Pro');
+    expect(v.upgradePlan).toBe('browser_pro');
+    expect(v.canStartTrial).toBe(false);
   });
 
   it('never offers a personal trial on a team seat', () => {

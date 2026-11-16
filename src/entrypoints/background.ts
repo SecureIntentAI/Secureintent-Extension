@@ -300,9 +300,12 @@ export default defineBackground(() => {
       refreshEntitlementBg().then(sendResponse);
       return true;
     }
-    // Popup's Start trial: the account's one 30-day Desktop Pro trial.
+    // Popup's Start trial: the account's one 30-day trial, Browser Pro from the
+    // extension (the extension only). A message naming Desktop Pro is honoured.
     if (type === 'si-start-trial') {
-      startTrialBg().then(sendResponse);
+      const product =
+        (msg as { product?: unknown }).product === 'desktop_pro' ? 'desktop_pro' : 'browser_pro';
+      startTrialBg(product).then(sendResponse);
       return true;
     }
     handleRefreshMessage(msg).then(sendResponse);

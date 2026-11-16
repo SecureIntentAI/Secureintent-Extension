@@ -166,8 +166,8 @@ describe('PlanCard', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  // KAU-58: the 30-day Desktop Pro trial.
-  describe('Desktop Pro trial', () => {
+  // KAU-58: the 30-day trial. From the extension it is Browser Pro (15 Nov 2026).
+  describe('free trial', () => {
     const NOW_SEC = Math.floor(Date.now() / 1000);
 
     test('a running trial shows the days left', async () => {
@@ -184,32 +184,55 @@ describe('PlanCard', () => {
       expect(screen.queryByText(/Start 30-day/)).toBeNull();
     });
 
-    test('Start trial asks the background, then shows the new plan', async () => {
-      const available = { ...FREE, trial: { state: 'available' as const, endsAt: null } };
+    test('an ended Browser Pro trial says so, and Upgrade opens the account page on Browser Pro', async () => {
+      getActiveEntitlement.mockResolvedValue({
+        ...FREE,
+        trial: { state: 'used', endsAt: NOW_SEC - 86_400, product: 'browser_pro' },
+      });
+      const open = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never);
+      render(<PlanCard />);
+      expect(await screen.findByText('Your Browser Pro trial has ended.')).toBeTruthy();
+      fireEvent.click(screen.getByText('Upgrade to Browser Pro'));
+      expect(open).toHaveBeenCalledWith({
+        url: expect.stringMatching(/account\.html\?plan=browser_pro&interval=monthly$/),
+      });
+    });
+
+    test('Start trial asks the background for Browser Pro, then shows the countdown', async () => {
+      const available = {
+        ...FREE,
+        trial: {
+          state: 'available' as const,
+          endsAt: null,
+          available: ['browser_pro' as const, 'desktop_pro' as const],
+        },
+      };
       getActiveEntitlement.mockResolvedValue(available);
       const send = vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (msg) => {
         if ((msg as { type: string }).type === 'si-start-trial') {
           getActiveEntitlement.mockResolvedValue({
             ...FREE,
             plan: 'developer_pro',
-            tier: 'desktop_pro',
+            tier: 'browser_pro',
             pro: true,
-            trial: { state: 'active', endsAt: NOW_SEC + 30 * 86_400 },
+            source: 'trial',
+            trial: { state: 'active', endsAt: NOW_SEC + 30 * 86_400, product: 'browser_pro' },
           });
           return { ok: true };
         }
         return { status: 'unchanged' };
       });
       render(<PlanCard />);
-      fireEvent.click(await screen.findByText('Start 30-day Desktop Pro trial'));
+      fireEvent.click(await screen.findByText('Start 30-day Browser Pro trial'));
       expect(await screen.findByText('30 days left')).toBeTruthy();
-      expect(send).toHaveBeenCalledWith({ type: 'si-start-trial' });
+      expect(screen.getByText(/Browser Pro trial:/)).toBeTruthy();
+      expect(send).toHaveBeenCalledWith({ type: 'si-start-trial', product: 'browser_pro' });
     });
 
     test('a refused start says why, in plain words', async () => {
       getActiveEntitlement.mockResolvedValue({
         ...FREE,
-        trial: { state: 'available', endsAt: null },
+        trial: { state: 'available', endsAt: null, available: ['browser_pro'] },
       });
       vi.spyOn(fakeBrowser.runtime, 'sendMessage').mockImplementation(async (msg) =>
         (msg as { type: string }).type === 'si-start-trial'
@@ -217,8 +240,8 @@ describe('PlanCard', () => {
           : { status: 'unchanged' },
       );
       render(<PlanCard />);
-      fireEvent.click(await screen.findByText('Start 30-day Desktop Pro trial'));
-      expect((await screen.findByRole('alert')).textContent).toMatch(/isn't open yet/);
+      fireEvent.click(await screen.findByText('Start 30-day Browser Pro trial'));
+      expect((await screen.findByRole('alert')).textContent).toMatch(/aren't open yet/);
     });
   });
 });

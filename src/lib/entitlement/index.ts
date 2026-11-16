@@ -9,6 +9,7 @@ import {
   type StoredEntitlement,
   type Tier,
   type TrialInfo,
+  type TrialProduct,
 } from './types';
 
 /** The package an older blob (plan only) stands for, as the Worker maps them. */
@@ -23,11 +24,19 @@ const TRIAL_STATES: readonly TrialInfo['state'][] = ['none', 'available', 'activ
 /** The trial as signed, or none when the blob has no (or a malformed) trial. */
 function trialOf(t: unknown): TrialInfo {
   if (!t || typeof t !== 'object') return NO_TRIAL;
-  const { state, endsAt } = t as { state?: unknown; endsAt?: unknown };
+  const { state, endsAt, product, available } = t as {
+    state?: unknown;
+    endsAt?: unknown;
+    product?: unknown;
+    available?: unknown;
+  };
   if (!TRIAL_STATES.includes(state as TrialInfo['state'])) return NO_TRIAL;
+  const isProduct = (v: unknown): v is TrialProduct => v === 'browser_pro' || v === 'desktop_pro';
   return {
     state: state as TrialInfo['state'],
     endsAt: typeof endsAt === 'number' && Number.isFinite(endsAt) ? endsAt : null,
+    product: isProduct(product) ? product : null,
+    available: Array.isArray(available) ? available.filter(isProduct) : [],
   };
 }
 

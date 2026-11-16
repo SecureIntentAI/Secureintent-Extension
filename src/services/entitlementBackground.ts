@@ -12,6 +12,7 @@ import { configItem } from '@/lib/config/store';
 import { siDebug } from '@/lib/debug';
 import { entitlementItem, getActiveEntitlement } from '@/lib/entitlement';
 import { type RefreshResult, refreshEntitlement } from '@/lib/entitlement/refresh';
+import type { TrialProduct } from '@/lib/entitlement/types';
 import { anonymiseNeedsSignIn } from '@/lib/quota';
 import { offlineUsed } from '@/lib/quota/offline';
 import { getClerkTokenFromCookie, getClerkUserIdFromCookie } from './cookieToken';
@@ -202,7 +203,14 @@ export type StartTrialResult =
   | { ok: true }
   | {
       ok: false;
-      reason: 'signed_out' | 'not_open' | 'used' | 'not_needed' | 'unverified' | 'unavailable';
+      reason:
+        | 'signed_out'
+        | 'not_open'
+        | 'used'
+        | 'not_needed'
+        | 'unverified'
+        | 'not_eligible'
+        | 'unavailable';
     };
 
 const TRIAL_ERRORS: Record<string, StartTrialResult> = {
@@ -210,14 +218,18 @@ const TRIAL_ERRORS: Record<string, StartTrialResult> = {
   trial_used: { ok: false, reason: 'used' },
   trial_not_needed: { ok: false, reason: 'not_needed' },
   email_unverified: { ok: false, reason: 'unverified' },
+  email_not_eligible: { ok: false, reason: 'not_eligible' },
 };
 
 /**
- * Start the account's one 30-day Desktop Pro trial, then fetch the new signed
- * plan. The Worker answers 200 when it is already running, so this is safe to
+ * Start the account's one 30-day trial, then fetch the new signed plan. The
+ * extension offers Browser Pro, which is the extension only (15 Nov 2026). The
+ * Worker answers 200 when the same trial is already running, so this is safe to
  * call twice; the plan itself only ever comes from /v1/entitlement.
  */
-export async function startTrialBg(): Promise<StartTrialResult> {
+export async function startTrialBg(
+  product: TrialProduct = 'browser_pro',
+): Promise<StartTrialResult> {
   let result: StartTrialResult;
   try {
     result = await withDeadline(async (signal) => {
@@ -226,7 +238,7 @@ export async function startTrialBg(): Promise<StartTrialResult> {
       const res = await fetch(`${API_BASE}/v1/trial/start`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify({ product }),
         signal,
       });
       if (res.ok) return { ok: true } as const;

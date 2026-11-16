@@ -10,10 +10,11 @@ import { buildPlanView, type FeatureState, type PlanView } from './planFeatures'
 /** Why Start trial didn't start one, in words for the person who pressed it. */
 const TRIAL_REFUSED: Record<Exclude<StartTrialResult, { ok: true }>['reason'], string> = {
   signed_out: 'Sign in on the account page first, then try again.',
-  not_open: "The Desktop Pro trial isn't open yet.",
-  used: 'This account has already had its Desktop Pro trial.',
-  not_needed: 'Your plan already includes Desktop Pro.',
+  not_open: "Free trials aren't open yet.",
+  used: 'This account has already had its free trial.',
+  not_needed: 'Your plan already includes Browser Pro.',
   unverified: 'Verify your email on the account page first, then try again.',
+  not_eligible: 'Free trials need a permanent email address, not a throwaway one.',
   unavailable: "Couldn't start the trial just now. Try again in a moment.",
 };
 
@@ -82,6 +83,12 @@ function HelpIcon() {
       <circle cx="12" cy="17" r="0.9" fill="currentColor" />
     </svg>
   );
+}
+
+/** Upgrade opens the account page on that plan, where checkout starts (one destination). */
+function openUpgrade(plan: string) {
+  const url = `${ACCOUNT_URL}?plan=${encodeURIComponent(plan)}&interval=monthly`;
+  browser.tabs.create({ url }).catch(() => {});
 }
 
 /** Remembers whether the plan checklist is expanded (default: shown). */
@@ -185,7 +192,7 @@ export function PlanCard() {
     setTrialBusy(true);
     setTrialError(null);
     const result = (await browser.runtime
-      .sendMessage({ type: 'si-start-trial' })
+      .sendMessage({ type: 'si-start-trial', product: 'browser_pro' })
       .catch(() => null)) as StartTrialResult | null;
     setTrialBusy(false);
     if (!result?.ok) setTrialError(TRIAL_REFUSED[result?.reason ?? 'unavailable']);
@@ -253,12 +260,14 @@ export function PlanCard() {
           <span className="si-plan-title">Your plan</span>
         </button>
         <span className={`si-plan-tag${view.isPro ? ' is-pro' : ''}`}>{view.planLabel}</span>
-        {/* A seat holder shouldn't be sold a plan they already have through work. */}
-        {!view.isPro && !view.org && isAuthEnabled() && (
+        {/* A seat holder shouldn't be sold a plan they already have through work.
+          On a trial Upgrade stays: buying ends the trial. Once the trial is over the
+          card's own "Upgrade to …" button below takes its place. */}
+        {view.showUpgrade && !view.trialEnded && isAuthEnabled() && (
           <button
             type="button"
             className="si-plan-upgrade"
-            onClick={() => browser.tabs.create({ url: ACCOUNT_URL }).catch(() => {})}
+            onClick={() => openUpgrade(view.upgradePlan)}
           >
             Upgrade
           </button>
@@ -273,11 +282,28 @@ export function PlanCard() {
         </p>
       )}
       {view.trial && (
-        <p className="si-plan-trial">
-          Desktop Pro trial:{' '}
-          <b>{view.trial.daysLeft === 1 ? '1 day left' : `${view.trial.daysLeft} days left`}</b>{' '}
-          (ends {view.trial.endsOn}).
-        </p>
+        <div className={`si-plan-countdown${view.trial.endingSoon ? ' is-ending' : ''}`}>
+          <p className="si-plan-trial">
+            {view.trial.label} trial:{' '}
+            <b>{view.trial.daysLeft === 1 ? '1 day left' : `${view.trial.daysLeft} days left`}</b>{' '}
+            (ends {view.trial.endsOn}).
+          </p>
+          <div className="si-plan-countdown-bar" aria-hidden="true">
+            <span style={{ width: `${Math.round(view.trial.left * 100)}%` }} />
+          </div>
+        </div>
+      )}
+      {view.trialEnded && isAuthEnabled() && (
+        <div className="si-plan-trial-offer">
+          <span className="si-plan-trial-note">Your {view.trialEnded} trial has ended.</span>
+          <button
+            type="button"
+            className="si-plan-trial-start"
+            onClick={() => openUpgrade(view.upgradePlan)}
+          >
+            Upgrade to {view.trialEnded}
+          </button>
+        </div>
       )}
       {view.canStartTrial && isAuthEnabled() && (
         <div className="si-plan-trial-offer">
@@ -287,9 +313,9 @@ export function PlanCard() {
             onClick={() => void startTrial()}
             disabled={trialBusy}
           >
-            {trialBusy ? 'Starting…' : 'Start 30-day Desktop Pro trial'}
+            {trialBusy ? 'Starting…' : 'Start 30-day Browser Pro trial'}
           </button>
-          <span className="si-plan-trial-note">Free, no card. Once per account.</span>
+          <span className="si-plan-trial-note">Free, no card. Ends by itself after 30 days.</span>
           {trialError && (
             <p className="si-plan-trial-error" role="alert">
               {trialError}

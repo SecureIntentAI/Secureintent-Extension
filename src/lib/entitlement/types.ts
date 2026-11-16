@@ -4,10 +4,19 @@
  */
 export type Tier = 'free' | 'browser_pro' | 'desktop_pro' | 'business';
 
-/** The account's one 30-day Desktop Pro trial. `endsAt` is Unix seconds. */
+/** A plan a trial can be for (15 Nov 2026): Browser Pro is this extension only. */
+export type TrialProduct = 'browser_pro' | 'desktop_pro';
+
+/**
+ * The account's one 30-day trial. `endsAt` is Unix seconds. `product` says which
+ * plan it is (or was) for; `available` lists the plans a trial can still be
+ * started for. Both are absent in blobs from before the Worker sent them.
+ */
 export interface TrialInfo {
   state: 'none' | 'available' | 'active' | 'used';
   endsAt: number | null;
+  product?: TrialProduct | null;
+  available?: TrialProduct[];
 }
 
 /** Mirrors the Worker's signed entitlement blob (backend lib/entitlementSign.ts). */
