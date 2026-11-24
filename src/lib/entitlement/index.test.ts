@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 
 // Mock the Ed25519 verifier so tests don't need the private signing key.
@@ -11,6 +11,7 @@ vi.mock('@/lib/config/verify', () => ({
     value && typeof value === 'object' ? (value as Record<string, string>) : null,
 }));
 
+import { clockFloorItem, resetClockFloorMemory } from './clock';
 import {
   canManageTeam,
   evaluateBlob,
@@ -39,6 +40,10 @@ const proBlob = (over: Partial<SignedEntitlement> = {}): SignedEntitlement => ({
 
 beforeEach(() => {
   fakeBrowser.reset();
+  resetClockFloorMemory();
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('evaluateBlob', () => {
@@ -240,5 +245,48 @@ describe('canManageTeam', () => {
   test('is false when the role is unknown or the user has no team', () => {
     expect(canManageTeam(withOrg(null))).toBe(false);
     expect(canManageTeam(FREE_ENTITLEMENT)).toBe(false);
+  });
+});
+
+// The clock floor (24 Nov 2026): expiry is checked against the highest time seen.
+// proBlob() is issued at 1000 s, expires at 2000 s.
+describe('clock floor', () => {
+  const store = () =>
+    entitlementItem.setValue({ blob: proBlob(), signatures: { 'entitlement-2026-11': 'valid' } });
+
+  test('a valid plan still works normally', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1500 * 1000);
+    await store();
+    expect((await getActiveEntitlement()).pro).toBe(true);
+    const stop = await initEntitlementCache();
+    expect(hasFeatureCached('rehydrate')).toBe(true);
+    stop();
+  });
+
+  test('an expired plan stays expired after the clock is moved back', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await store();
+    vi.setSystemTime(3000 * 1000);
+    expect((await getActiveEntitlement()).pro).toBe(false);
+
+    vi.setSystemTime(1500 * 1000);
+    expect((await getActiveEntitlement()).pro).toBe(false);
+    const stop = await initEntitlementCache();
+    expect(hasFeatureCached('rehydrate')).toBe(false);
+    expect(getEntitlementSnapshot().pro).toBe(false);
+    stop();
+  });
+
+  test('the floor survives a restart (it is in storage, not only memory)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    await store();
+    vi.setSystemTime(3000 * 1000);
+    await getActiveEntitlement();
+    expect(await clockFloorItem.getValue()).toBe(3000 * 1000);
+
+    resetClockFloorMemory(); // a new service worker / content script
+    vi.setSystemTime(1500 * 1000);
+    expect((await getActiveEntitlement()).pro).toBe(false);
   });
 });

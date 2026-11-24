@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { fakeBrowser } from 'wxt/testing';
 import type { ActiveEntitlement } from '@/lib/entitlement';
+import { deviceLimitItem } from '@/lib/entitlement/device';
 import type { QuotaStatus } from '@/lib/quota';
 import { PlanCard } from './PlanCard';
 
@@ -242,6 +243,38 @@ describe('PlanCard', () => {
       render(<PlanCard />);
       fireEvent.click(await screen.findByText('Start 30-day Browser Pro trial'));
       expect((await screen.findByRole('alert')).textContent).toMatch(/aren't open yet/);
+    });
+  });
+
+  // The browser limit (24 Nov 2026): the Worker says why this browser is on free.
+  describe('browser limit', () => {
+    test('over the limit: says so and links to the account page', async () => {
+      await deviceLimitItem.setValue({ kind: 'browser', reason: 'limit', limit: 5 });
+      const open = vi.spyOn(fakeBrowser.tabs, 'create').mockResolvedValue({} as never);
+      render(<PlanCard />);
+      expect(
+        await screen.findByText(
+          /This browser isn't counted on your plan: your account is already used in 5 browsers\. Remove one on your account page\./,
+        ),
+      ).toBeTruthy();
+      fireEvent.click(screen.getByText('Account page'));
+      expect(open).toHaveBeenCalledWith({ url: expect.stringMatching(/account\.html$/) });
+    });
+
+    test('removed: asks to sign in again', async () => {
+      await deviceLimitItem.setValue({ kind: 'browser', reason: 'removed', limit: 5 });
+      render(<PlanCard />);
+      expect(
+        await screen.findByText(
+          /This browser was removed from your account\. Sign in again on your account page to use your plan here\./,
+        ),
+      ).toBeTruthy();
+    });
+
+    test('no deviceLimit: no note', async () => {
+      render(<PlanCard />);
+      await screen.findByText('Browser Free');
+      expect(screen.queryByText(/This browser/)).toBeNull();
     });
   });
 });
