@@ -1,4 +1,5 @@
 import { verifySigned } from '@/lib/config/verify';
+import { trustedNowMs, trustedNowMsSync } from './clock';
 import { entitlementItem } from './store';
 import {
   type ActiveEntitlement,
@@ -116,7 +117,8 @@ export async function getActiveEntitlement(
   expectedUserId?: string | null,
 ): Promise<ActiveEntitlement> {
   const stored = await entitlementItem.getValue();
-  return evaluateStored(stored, Math.floor(Date.now() / 1000), expectedUserId);
+  // Expiry uses the clock floor (the highest time seen), not raw Date.now() (24 Nov 2026).
+  return evaluateStored(stored, Math.floor((await trustedNowMs()) / 1000), expectedUserId);
 }
 
 // --- Synchronous cache for content-script hot paths (mirrors the `enabled` flag) ---
@@ -176,7 +178,8 @@ async function computeCache(): Promise<{
   expiry: number;
 }> {
   const stored = await entitlementItem.getValue();
-  const ent = await evaluateStored(stored, Math.floor(Date.now() / 1000));
+  // The clock floor, also primed here for the synchronous checks below (24 Nov 2026).
+  const ent = await evaluateStored(stored, Math.floor((await trustedNowMs()) / 1000));
   let signed: SignedEntitlement | null = null;
   try {
     signed = JSON.parse(stored?.payload ?? JSON.stringify(stored?.blob ?? null));
@@ -227,12 +230,13 @@ export async function initEntitlementCache(): Promise<() => void> {
 
 /** Synchronous gate for the paste/lock hot paths. Reads the primed cache. */
 export function hasFeatureCached(key: FeatureKey): boolean {
-  return cachedExpiry > Date.now() / 1000 && cachedFeatures.has(key);
+  // The clock floor (24 Nov 2026): expiry against the highest time seen.
+  return cachedExpiry > trustedNowMsSync() / 1000 && cachedFeatures.has(key);
 }
 
 /** Synchronous user-context snapshot for telemetry. Reads the primed cache. */
 export function getEntitlementSnapshot(): EntitlementSnapshot {
-  return cachedExpiry > Date.now() / 1000 ? cachedSnapshot : FREE_SNAPSHOT;
+  return cachedExpiry > trustedNowMsSync() / 1000 ? cachedSnapshot : FREE_SNAPSHOT;
 }
 
 /**

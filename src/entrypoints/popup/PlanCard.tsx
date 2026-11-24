@@ -3,6 +3,8 @@ import { browser, storage } from '#imports';
 import { ACCOUNT_URL, isAuthEnabled } from '@/lib/clerkConfig';
 import { getActiveBundle } from '@/lib/config';
 import { entitlementItem, getActiveEntitlement } from '@/lib/entitlement';
+import { trustedNowMs } from '@/lib/entitlement/clock';
+import { type DeviceLimit, deviceLimitItem } from '@/lib/entitlement/device';
 import { getAnonymizeStatus } from '@/lib/quota';
 import type { StartTrialResult } from '@/services/entitlementBackground';
 import { buildPlanView, type FeatureState, type PlanView } from './planFeatures';
@@ -94,7 +96,30 @@ function openUpgrade(plan: string) {
 /** Remembers whether the plan checklist is expanded (default: shown). */
 const planExpandedItem = storage.defineItem<boolean>('local:si_plan_expanded', { fallback: true });
 
-type LoadState = { kind: 'loading' } | { kind: 'ready'; view: PlanView } | { kind: 'error' };
+type LoadState =
+  | { kind: 'loading' }
+  | { kind: 'ready'; view: PlanView; deviceLimit: DeviceLimit | null }
+  | { kind: 'error' };
+
+/**
+ * Why this browser is on the free plan although the account isn't: the Worker
+ * says so next to the signed plan when the account is over its browser limit,
+ * or this browser was removed on the account page (24 Nov 2026).
+ */
+function deviceLimitText(d: DeviceLimit): string {
+  return d.reason === 'removed'
+    ? 'This browser was removed from your account. Sign in again on your account page to use your plan here.'
+    : `This browser isn't counted on your plan: your account is already used in ${d.limit} browsers. Remove one on your account page.`;
+}
+
+/** The deviceLimit stored by the last refresh. Never throws: it is only an explanation. */
+async function readDeviceLimit(): Promise<DeviceLimit | null> {
+  try {
+    return await deviceLimitItem.getValue();
+  } catch {
+    return null;
+  }
+}
 
 /**
  * How many patterns in the active bundle the team's own admin wrote. Only a
@@ -125,8 +150,14 @@ async function computeView(): Promise<PlanView> {
     orgName: ent.org?.name ?? null,
     actorId: null, // quota only needs plan + sign-in state
   };
-  const [quota, teamRules] = await Promise.all([getAnonymizeStatus(snap), countTeamRules()]);
+  const [quota, teamRules, nowMs] = await Promise.all([
+    getAnonymizeStatus(snap),
+    countTeamRules(),
+    // The trial countdown uses the clock floor too, so it agrees with the plan (24 Nov 2026).
+    trustedNowMs(),
+  ]);
   return buildPlanView({
+    nowMs,
     tier: ent.tier,
     pro: ent.pro,
     trial: ent.trial,
@@ -166,9 +197,9 @@ export function PlanCard() {
     // A failure here is visible and retryable: the skeleton used to sit there
     // aria-hidden forever, telling the user nothing.
     try {
-      const view = await computeView();
+      const [view, deviceLimit] = await Promise.all([computeView(), readDeviceLimit()]);
       if (!live()) return;
-      setState({ kind: 'ready', view });
+      setState({ kind: 'ready', view, deviceLimit });
     } catch {
       if (live()) setState({ kind: 'error' });
       return;
@@ -181,8 +212,8 @@ export function PlanCard() {
     // that the plan couldn't be re-checked.
     try {
       await browser.runtime.sendMessage({ type: 'si-refresh-entitlement' });
-      const view = await computeView();
-      if (live()) setState({ kind: 'ready', view });
+      const [view, deviceLimit] = await Promise.all([computeView(), readDeviceLimit()]);
+      if (live()) setState({ kind: 'ready', view, deviceLimit });
     } catch {
       /* keep the cached view */
     }
@@ -245,7 +276,7 @@ export function PlanCard() {
     );
   }
 
-  const { view } = state;
+  const { view, deviceLimit } = state;
   return (
     <section className="si-plan si-plan--in">
       <div className="si-plan-head">
@@ -279,6 +310,18 @@ export function PlanCard() {
         <p className="si-plan-org">
           Team seat from <b>{view.org.name}</b>:{' '}
           {view.org.isAdmin ? 'you administer this team.' : 'managed by your admin.'}
+        </p>
+      )}
+      {deviceLimit && (
+        <p className="si-plan-device" role="status">
+          {deviceLimitText(deviceLimit)}{' '}
+          <button
+            type="button"
+            className="si-plan-device-link"
+            onClick={() => browser.tabs.create({ url: ACCOUNT_URL }).catch(() => {})}
+          >
+            Account page
+          </button>
         </p>
       )}
       {view.trial && (

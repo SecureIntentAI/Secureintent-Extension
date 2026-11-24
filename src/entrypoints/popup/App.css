@@ -315,6 +315,23 @@
   color: var(--si-text);
   font-weight: 600;
 }
+/* This browser is over the account's browser limit, or was removed from it
+   (24 Nov 2026). Same quiet note style as the team-seat line. */
+.si-plan-device {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--si-muted);
+}
+.si-plan-device-link {
+  padding: 0;
+  font: inherit;
+  color: var(--si-text);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
 /* The 30-day trial: Start trial before, a countdown while it runs (amber for the
    last 3 days), Upgrade once it is over. */
 .si-plan-countdown-bar {
